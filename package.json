@@ -1,0 +1,22 @@
+{
+  "name": "trust404-rejection-log",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "test:contracts": "cd contracts && forge test -vv",
+    "e2e": "node scripts/e2e.ts",
+    "inspect": "node scripts/inspect-record.ts",
+    "attack:d1": "node scripts/attack-d1-denial.ts",
+    "attack:d2": "node scripts/attack-d2-omission.ts",
+    "attack:d3": "node scripts/attack-d3-rewrite.ts",
+    "measure": "node scripts/measure.ts"
+  },
+  "dependencies": {
+    "viem": "^2.56.3"
+  }
+}
