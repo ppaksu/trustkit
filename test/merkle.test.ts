@@ -1,4 +1,4 @@
-// 명세 docs/DESIGN.md 5.4절 필수 테스트 5종.
+// RFC 6962 머클 테스트. 크기 1~64 의 모든 인덱스와 모든 m < n 쌍을 돌린다.
 // 실행: node --test
 import test from "node:test";
 import assert from "node:assert/strict";

@@ -1,4 +1,4 @@
-// 앵커링 작업 테스트. 체인은 대역으로 끼운다. Anvil 이 필요한 통합 확인은 scripts/e2e.ts.
+// 앵커링 작업 테스트. 체인은 대역으로 끼운다.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { privateKeyToAccount } from "viem/accounts";
@@ -44,7 +44,7 @@ let counter = 0;
 async function makeLeaf(): Promise<Leaf> {
   counter++;
   const { body } = buildLeafBody({
-    gatekeeper: gk.address,
+    gateway: gk.address,
     policyHash: "0x" + "9a".repeat(32),
     fields: {
       requester: "0xabc0000000000000000000000000000000000001",
@@ -53,6 +53,7 @@ async function makeLeaf(): Promise<Leaf> {
       calldata_hash: "0x" + "cd".repeat(32),
       rule_id: "DENYLIST_SANCTIONED",
       severity: "block",
+      verifiability: "verifiable",
     },
     issuedAt: NOW,
   });

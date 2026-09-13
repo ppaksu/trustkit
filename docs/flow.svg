@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420" font-family="Apple SD Gothic Neo, Malgun Gothic, Noto Sans KR, sans-serif">
+  <defs>
+    <marker id="f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9a5220"/>
+    </marker>
+    <marker id="fc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1c5b70"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="420" fill="#ffffff"/>
+
+  <text x="32" y="38" font-size="17" font-weight="700" fill="#161a20">정상 경로 5단계</text>
+  <text x="32" y="60" font-size="12.5" fill="#606b78">요청자 서명이 판단 레코드의 필드로 들어가므로 단계가 늘지 않는다</text>
+
+  <!-- lifelines -->
+  <g font-size="12.5" font-weight="600" fill="#161a20" text-anchor="middle">
+    <rect x="52" y="86" width="116" height="34" rx="6" fill="#f4f6f8" stroke="#c9d0d8"/>
+    <text x="110" y="108">요청자</text>
+    <rect x="272" y="86" width="126" height="34" rx="6" fill="#f4f6f8" stroke="#c9d0d8"/>
+    <text x="335" y="108">게이트웨이</text>
+    <rect x="502" y="86" width="116" height="34" rx="6" fill="#f4f6f8" stroke="#c9d0d8"/>
+    <text x="560" y="108">로그</text>
+    <rect x="722" y="86" width="126" height="34" rx="6" fill="#e4eff3" stroke="#1c5b70" stroke-width="1.6"/>
+    <text x="785" y="108" fill="#1c5b70">체인</text>
+  </g>
+
+  <g stroke="#dde2e8" stroke-width="1.4" stroke-dasharray="4 5">
+    <line x1="110" y1="126" x2="110" y2="392"/>
+    <line x1="335" y1="126" x2="335" y2="392"/>
+    <line x1="560" y1="126" x2="560" y2="392"/>
+    <line x1="785" y1="126" x2="785" y2="392"/>
+  </g>
+
+  <!-- step 1 -->
+  <circle cx="34" cy="158" r="12" fill="#161a20"/>
+  <text x="34" y="163" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">1</text>
+  <line x1="110" y1="158" x2="329" y2="158" stroke="#9a5220" stroke-width="1.9" marker-end="url(#f)"/>
+  <text x="220" y="150" text-anchor="middle" font-size="11.5" fill="#9a5220">의도 서명 후 제시</text>
+
+  <!-- step 2 -->
+  <circle cx="34" cy="212" r="12" fill="#161a20"/>
+  <text x="34" y="217" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">2</text>
+  <rect x="278" y="196" width="114" height="32" rx="5" fill="#f6ece3" stroke="#9a5220"/>
+  <text x="335" y="216" text-anchor="middle" font-size="11.5" fill="#9a5220">정책 평가 → 거절</text>
+  <path d="M392,212 L779,212" fill="none" stroke="#1c5b70" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#fc)"/>
+  <text x="590" y="204" text-anchor="middle" font-size="11.5" fill="#1c5b70">eth_getProof · 판단 시점 상태 증거</text>
+
+  <!-- step 3 -->
+  <circle cx="34" cy="266" r="12" fill="#161a20"/>
+  <text x="34" y="271" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">3</text>
+  <line x1="335" y1="266" x2="116" y2="266" stroke="#9a5220" stroke-width="1.9" marker-end="url(#f)"/>
+  <text x="224" y="258" text-anchor="middle" font-size="11.5" fill="#9a5220">거절 레코드 서명 · 번들 전달</text>
+
+  <!-- step 4 -->
+  <circle cx="34" cy="316" r="12" fill="#161a20"/>
+  <text x="34" y="321" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">4</text>
+  <line x1="335" y1="308" x2="554" y2="308" stroke="#9a5220" stroke-width="1.9" marker-end="url(#f)"/>
+  <text x="446" y="300" text-anchor="middle" font-size="11.5" fill="#9a5220">제출</text>
+  <line x1="560" y1="332" x2="341" y2="332" stroke="#9a5220" stroke-width="1.9" marker-end="url(#f)"/>
+  <text x="450" y="348" text-anchor="middle" font-size="11.5" fill="#9a5220">LogAck · 편입 기한 약속</text>
+
+  <!-- step 5 -->
+  <circle cx="34" cy="378" r="12" fill="#161a20"/>
+  <text x="34" y="383" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">5</text>
+  <line x1="560" y1="378" x2="779" y2="378" stroke="#1c5b70" stroke-width="1.9" marker-end="url(#fc)"/>
+  <text x="670" y="370" text-anchor="middle" font-size="11.5" fill="#1c5b70">주기적 루트 앵커</text>
+</svg>

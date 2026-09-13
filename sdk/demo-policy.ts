@@ -1,33 +1,84 @@
-// 데모용 정책 문서. 이 파일의 내용 전체가 `policy_hash` 의 대상이다.
+// 데모용 정책 문서. 실제 기관의 정책이 아니고 실존 기관·제재 대상과 무관하다.
 //
-// 실제 기관의 정책이 아니다. 게이트키퍼 이름도 데모용이며 어떤 실존 기관도
-// 사칭하지 않는다. 명세 docs/DESIGN.md 4.2절의 policy_hash 항목.
-//
-// 규칙을 고치거나 순서를 바꾸면 해시가 달라진다. 그래야 사후에 "어떤 규칙집합
-// 하에서 내린 판단인가" 가 고정된다. 모든 스크립트가 이 하나를 공유해야
-// 같은 policy_hash 가 나온다.
-import type { Policy } from "./gatekeeper.ts";
-import { policyHash } from "./gatekeeper.ts";
+// DEMO_POLICY 전체가 policy_hash 의 대상이다. 규칙을 고치거나 순서를 바꾸면
+// 해시가 달라지므로 모든 스크립트가 이 하나를 공유해야 한다.
+import { policyHash, type PolicyDocument } from "../lib/record.ts";
 
-export const GATEKEEPER_LABEL = "Demo Custody Gatekeeper";
+export const GATEWAY_LABEL = "Demo Custody Gateway";
 
-/** 제재 목록에 올린 데모 주소. 실제 제재 대상과 무관하다. */
+/** 데모용 차단 주소. */
 export const SANCTIONED = "0x000000000000000000000000000000000000dead";
-/** 허용 목록에 있는 데모 수신자. */
+/** 데모용 허용 수신자. */
 export const KNOWN_TARGET = "0x000000000000000000000000000000000000beef";
+/** ERC-4337 EntryPoint 예치금 슬롯. 동적 사유 데모에 쓴다. */
+export const ENTRYPOINT = "0x0000000071727de22e5e9d8baf0edac6f37da032";
+export const DEPOSIT_SLOT = "0x" + "00".repeat(31) + "01";
 
-export const DEMO_POLICY: Policy = {
-  version: 1,
-  denylist: [SANCTIONED],
-  maxValueWei: "1000000000000000000", // 1 ether
-  allowedTargets: [KNOWN_TARGET],
-};
-
-/** 규칙 설명. 발표와 데모 화면에서 그대로 쓴다. */
-export const RULE_DESCRIPTIONS: Record<string, string> = {
-  DENYLIST_SANCTIONED: "수신자가 제재 목록에 있음 (차단)",
-  AMOUNT_CAP_EXCEEDED: "금액이 한도를 초과함 (보류)",
-  UNKNOWN_CONTRACT: "수신자가 허용 목록 밖임 (검토)",
+/**
+ * 검증 가능 넷, 외부 데이터 의존 하나, 재량 하나. 뒤의 둘을 일부러 넣었다.
+ * 재량 사유를 없애는 게 아니라 드러나게 만드는 것이 목표다.
+ */
+export const DEMO_POLICY: PolicyDocument = {
+  version: 2,
+  rules: [
+    {
+      rule_id: "DENYLIST_SANCTIONED",
+      description: "수신자가 제재 목록에 있음",
+      severity: "block",
+      verifiability: "verifiable",
+      predicate: { kind: "in_set", field: "target", set: "denylist" },
+    },
+    {
+      rule_id: "AMOUNT_CAP_EXCEEDED",
+      description: "금액이 한도를 초과함",
+      severity: "hold",
+      verifiability: "verifiable",
+      predicate: { kind: "gt", field: "value", limit: "1000000000000000000" },
+    },
+    {
+      rule_id: "WHITELIST_MISS",
+      description: "수신자가 허용 목록 밖임",
+      severity: "review",
+      verifiability: "verifiable",
+      predicate: { kind: "not_in_set", field: "target", set: "allowedTargets" },
+    },
+    {
+      rule_id: "DEPOSIT_INSUFFICIENT",
+      description: "판단 시점 EntryPoint 예치금이 요청액 미만",
+      severity: "block",
+      verifiability: "verifiable",
+      predicate: {
+        kind: "state_slot",
+        account: ENTRYPOINT,
+        slot: DEPOSIT_SLOT,
+        op: "lt",
+        operand: "value",
+      },
+    },
+    {
+      rule_id: "SANCTIONS_SCREENING_HIT",
+      description: "외부 제재 스크리닝 결과 적중",
+      severity: "block",
+      // 외부 데이터 의존. 입력을 커밋할 수 없어 검증기가 판정 불가로 보고한다.
+      verifiability: "external",
+    },
+    {
+      rule_id: "MANUAL_REVIEW_HOLD",
+      description: "담당자 수동 검토 보류",
+      severity: "hold",
+      // 술어로 표현 불가. 재량 사유임을 레코드에 드러낸다.
+      verifiability: "discretionary",
+    },
+  ],
+  data_sets: {
+    denylist: [SANCTIONED],
+    allowedTargets: [KNOWN_TARGET],
+  },
 };
 
 export const DEMO_POLICY_HASH = policyHash(DEMO_POLICY);
+
+/** 데모 화면 출력용. */
+export const RULE_DESCRIPTIONS: Record<string, string> = Object.fromEntries(
+  DEMO_POLICY.rules.map((r) => [r.rule_id, `${r.description} (${r.severity})`]),
+);

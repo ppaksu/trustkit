@@ -1,4 +1,4 @@
-// 앵커 컨트랙트 접속부. 명세 docs/DESIGN.md 7장.
+// 앵커 컨트랙트 접속부. 루트 읽기·쓰기와 게이트웨이 레지스트리 조회.
 import {
   createPublicClient,
   createWalletClient,
@@ -26,9 +26,9 @@ export const LOG_ANCHOR_ABI = [
   },
   {
     type: "event",
-    name: "GatekeeperSet",
+    name: "GatewaySet",
     inputs: [
-      { type: "address", name: "gatekeeper", indexed: true },
+      { type: "address", name: "gateway", indexed: true },
       { type: "bool", name: "allowed", indexed: false },
     ],
     anonymous: false,
@@ -49,7 +49,7 @@ export const LOG_ANCHOR_ABI = [
   },
   {
     type: "function",
-    name: "gatekeepers",
+    name: "gateways",
     inputs: [{ type: "address" }],
     outputs: [{ type: "bool" }],
     stateMutability: "view",
@@ -70,17 +70,14 @@ export const LOG_ANCHOR_ABI = [
   },
   {
     type: "function",
-    name: "setGatekeeper",
+    name: "setGateway",
     inputs: [{ type: "address" }, { type: "bool" }],
     outputs: [],
     stateMutability: "nonpayable",
   },
 ] as const;
 
-/**
- * 앵커링 작업이 쓰는 최소 인터페이스.
- * 테스트가 체인 없이 대역을 끼울 수 있도록 좁게 잡았다.
- */
+/** 앵커링 작업이 쓰는 최소 인터페이스. 테스트가 대역을 끼울 수 있게 좁게 잡았다. */
 export interface AnchorChain {
   lastTreeSize(): Promise<number>;
   rootByTreeSize(treeSize: number): Promise<Hex>;
@@ -112,7 +109,7 @@ export function connectAnchor(o: ChainOptions) {
   const api: AnchorChain & {
     isRegistered(gk: Address): Promise<boolean>;
     logOperator(): Promise<Address>;
-    setGatekeeper(gk: Address, allowed: boolean, owner: Account): Promise<string>;
+    setGateway(gk: Address, allowed: boolean, owner: Account): Promise<string>;
   } = {
     async lastTreeSize() {
       return Number(await read<bigint>("lastTreeSize"));
@@ -133,19 +130,19 @@ export function connectAnchor(o: ChainOptions) {
       await publicClient.waitForTransactionReceipt({ hash });
       return hash;
     },
-    /** 접수 검증 7번. 로그 서버가 이 함수를 주입받는다. */
+    /** 로그 서버와 검증기가 모두 이 함수를 쓴다. */
     async isRegistered(gk) {
-      return read<boolean>("gatekeepers", [gk]);
+      return read<boolean>("gateways", [gk]);
     },
     async logOperator() {
       return read<Address>("logOperator");
     },
-    async setGatekeeper(gk, allowed, owner) {
+    async setGateway(gk, allowed, owner) {
       const w = createWalletClient({ account: owner, chain: o.chain, transport: http(o.rpcUrl) });
       const hash = await w.writeContract({
         address: o.address,
         abi: LOG_ANCHOR_ABI,
-        functionName: "setGatekeeper",
+        functionName: "setGateway",
         args: [gk, allowed],
         chain: o.chain,
         account: owner,

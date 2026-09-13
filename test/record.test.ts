@@ -1,4 +1,4 @@
-// 레코드 계층 테스트. 명세 docs/DESIGN.md 4장.
+// 레코드 계층 테스트.
 // 실행: node --test "test/**/*.test.ts"
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,6 +14,7 @@ import {
   verifyDisclosure,
   REQUIRED_KEYS,
   RecordError,
+  SEVERITY_VALUES,
   type Leaf,
   type Disclosure,
 } from "../lib/record.ts";
@@ -28,11 +29,12 @@ const sampleFields = () => ({
   calldata_hash: "0x" + "cd".repeat(32),
   rule_id: "DENYLIST_SANCTIONED",
   severity: "block",
+  verifiability: "verifiable",
 });
 
 const build = () =>
   buildLeafBody({
-    gatekeeper: "0x1111111111111111111111111111111111111111",
+    gateway: "0x1111111111111111111111111111111111111111",
     policyHash: "0x" + "9a".repeat(32),
     fields: sampleFields(),
     issuedAt: 1757203200,
@@ -101,7 +103,7 @@ test("커밋 — 32바이트가 아닌 salt 를 거부한다", () => {
 
 test("리프 — keys 는 필수 집합과 같고 사전순이다", () => {
   const { body } = build();
-  assert.deepEqual(body.keys, REQUIRED_KEYS[1]);
+  assert.deepEqual(body.keys, REQUIRED_KEYS[2].decision);
   assert.deepEqual([...body.keys].sort(), body.keys);
 });
 
@@ -122,13 +124,13 @@ test("리프 — 필드가 빠지거나 남으면 구성이 거부된다", () =>
   const missing = sampleFields();
   delete (missing as Record<string, string>).target;
   assert.throws(
-    () => buildLeafBody({ gatekeeper: "0x11", policyHash: "0x22", fields: missing, issuedAt: 1 }),
+    () => buildLeafBody({ gateway: "0x11", policyHash: "0x22", fields: missing, issuedAt: 1 }),
     RecordError,
   );
 
   const extra = { ...sampleFields(), memo: "hi" };
   assert.throws(
-    () => buildLeafBody({ gatekeeper: "0x11", policyHash: "0x22", fields: extra, issuedAt: 1 }),
+    () => buildLeafBody({ gateway: "0x11", policyHash: "0x22", fields: extra, issuedAt: 1 }),
     RecordError,
   );
 });
@@ -180,7 +182,7 @@ test("공개 — 값을 바꾼 disclosure 는 실패한다", () => {
   assert.equal(verifyDisclosure(body, forged), false);
 });
 
-test("공개 — 게이트키퍼가 한 키를 두 번 커밋하면 누락된 키에서 드러난다", () => {
+test("공개 — 게이트웨이가 한 키를 두 번 커밋하면 누락된 키에서 드러난다", () => {
   // target 자리에 rule_id 커밋을 넣어 target 을 사실상 빠뜨린 리프.
   const { body, disclosures } = build();
   const iTarget = body.keys.indexOf("target");
@@ -214,16 +216,10 @@ test("루트 — 키를 하나 바꾸면 keysRoot 가 바뀐다", () => {
 test("리프 해시 — 필드 순서를 바꿔도 같은 해시가 나온다 (JCS 덕분)", () => {
   const { body } = build();
   const leaf = sign(body);
-  const shuffled = {
-    signature: leaf.signature,
-    nonce: leaf.nonce,
-    issued_at: leaf.issued_at,
-    field_hashes: leaf.field_hashes,
-    keys: leaf.keys,
-    policy_hash: leaf.policy_hash,
-    gatekeeper: leaf.gatekeeper,
-    v: leaf.v,
-  } as Leaf;
+  // 키 순서를 뒤집어도 JCS 가 정렬하므로 같은 바이트열이 된다.
+  const shuffled = Object.fromEntries(
+    Object.entries(leaf).reverse(),
+  ) as unknown as Leaf;
   assert.ok(leafHash(leaf).equals(leafHash(shuffled)));
 });
 
@@ -240,4 +236,33 @@ test("리프 해시 — 접두사 0x00 이 들어간다", () => {
     .update(Buffer.concat([Buffer.from([0x00]), canonicalBytes(leaf)]))
     .digest();
   assert.ok(leafHash(leaf).equals(expected));
+});
+
+// ---------- 거절만 기록한다 ----------
+
+test("심각도 — allow 는 유효한 값이 아니다", () => {
+  // 통과한 요청은 아무 기록도 남기지 않는다. 통과는 체인에 트랜잭션으로 남으므로
+  // 이 로그가 채울 공백이 아니다.
+  assert.ok(!(SEVERITY_VALUES as readonly string[]).includes("allow"));
+  assert.deepEqual([...SEVERITY_VALUES], ["block", "hold", "review"]);
+  assert.throws(
+    () =>
+      buildLeafBody({
+        gateway: "0x1111111111111111111111111111111111111111",
+        policyHash: "0x" + "9a".repeat(32),
+        fields: { ...sampleFields(), severity: "allow" },
+        issuedAt: 1757203200,
+      }),
+    RecordError,
+  );
+});
+
+test("정책 — 데모 정책의 모든 규칙이 거절 심각도를 쓴다", async () => {
+  const { DEMO_POLICY } = await import("../sdk/demo-policy.ts");
+  for (const r of DEMO_POLICY.rules) {
+    assert.ok(
+      (SEVERITY_VALUES as readonly string[]).includes(r.severity),
+      `규칙 ${r.rule_id} 의 심각도 ${r.severity}`,
+    );
+  }
 });

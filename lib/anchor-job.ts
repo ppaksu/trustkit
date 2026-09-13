@@ -1,8 +1,8 @@
 // 앵커링 작업. 오프체인 트리 머리를 주기적으로 체인에 고정한다.
 //
-// 이 작업이 거절 판정 경로에 있으면 안 된다. 게이트키퍼는 로그 서버의 응답만
+// 이 작업이 거절 판정 경로에 있으면 안 된다. 게이트웨이는 로그 서버의 응답만
 // 기다리고, 루트는 나중에 따로 올라간다. 체인 장애가 차단을 막지 않는다.
-// 명세 docs/DESIGN.md 3.3절.
+// 주기적 앵커링. 차단 경로 밖에서 돈다. 체인이 멈춰도 판단은 계속된다.
 import type { Hex } from "viem";
 import type { AnchorChain } from "./chain.ts";
 import type { LogStore } from "./log-store.ts";

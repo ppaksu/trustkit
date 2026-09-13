@@ -1,5 +1,9 @@
-// RFC 6962 Merkle tree. 명세 docs/DESIGN.md 5장 그대로.
-// 트리 정의는 RFC 9162 도 변경 없이 승계했다. 5.0절 참조.
+// RFC 6962 머클 트리.
+//
+// RFC 9162 가 6962 를 대체했지만 트리 정의는 그대로 승계했다. 9162 의 변경점은
+// CMS precertificate, TLS 확장 개명, 로그 OID, TransItem 인코딩으로 전부 인증서
+// 생태계 배관이다.
+
 import { createHash } from "node:crypto";
 
 const PREFIX_LEAF = Buffer.from([0x00]);
@@ -8,19 +12,19 @@ const PREFIX_NODE = Buffer.from([0x01]);
 const sha256 = (...parts: Buffer[]): Buffer =>
   createHash("sha256").update(Buffer.concat(parts)).digest();
 
-/** n 보다 작은 최대 2의 거듭제곱. n >= 2 에서만 호출된다. */
+/** RFC 가 정한 분할 지점. 다르게 가르면 같은 데이터에서 다른 루트가 나온다. */
 function largestPow2Below(n: number): number {
   let k = 1;
   while (k * 2 < n) k *= 2;
   return k;
 }
 
-/** 리프 데이터 하나의 해시. 접두사 0x00 이 두 번째 원상 공격을 막는다. */
+/** 접두사 0x00. 내부 노드(0x01)와 입력 공간을 나눠 제2역상 공격을 막는다. */
 export function leafHash(data: Buffer): Buffer {
   return sha256(PREFIX_LEAF, data);
 }
 
-/** RFC 6962 §2.1 — Merkle Tree Hash */
+/** 리프 전체의 루트. */
 export function mth(d: Buffer[]): Buffer {
   if (d.length === 0) return createHash("sha256").update(Buffer.alloc(0)).digest();
   if (d.length === 1) return sha256(PREFIX_LEAF, d[0]);
@@ -28,7 +32,7 @@ export function mth(d: Buffer[]): Buffer {
   return sha256(PREFIX_NODE, mth(d.slice(0, k)), mth(d.slice(k)));
 }
 
-/** RFC 6962 §2.1.1 — 인덱스 m 의 audit path */
+/** 리프 m 의 포함 증명. 루트까지 올라가며 만나는 형제 해시들. */
 export function inclusionPath(m: number, d: Buffer[]): Buffer[] {
   if (d.length === 1) return [];
   const k = largestPow2Below(d.length);
@@ -36,7 +40,7 @@ export function inclusionPath(m: number, d: Buffer[]): Buffer[] {
   return [...inclusionPath(m - k, d.slice(k)), mth(d.slice(0, k))];
 }
 
-/** RFC 6962 §2.1.2 — 크기 m 트리에서 크기 n 트리로의 consistency proof */
+/** 크기 m 에서 n 으로 덧붙이기만 했음을 보이는 증명. */
 export function consistencyProof(m: number, d: Buffer[]): Buffer[] {
   return subproof(m, d, true);
 }
@@ -49,9 +53,10 @@ function subproof(m: number, d: Buffer[], b: boolean): Buffer[] {
 }
 
 /**
- * audit path 로부터 루트를 재계산한다. 반복형이며 생성기와 독립이다.
- * 검증자는 이 결과를 온체인 앵커의 루트와 비교한다. 현재 루트가 아니다.
- * 실패하면 null.
+ * 포함 증명에서 루트를 재계산한다. 불가능한 입력이면 null.
+ *
+ * 결과는 **체인에 박힌 루트**와 비교해야 한다. 로그 서버가 알려준 루트와
+ * 비교하면 아무것도 증명되지 않는다. 거짓 루트를 같이 불러주면 그만이다.
  */
 export function rootFromInclusionProof(
   leafIndex: number,
@@ -81,12 +86,11 @@ export function rootFromInclusionProof(
 }
 
 /**
- * 크기 n 트리가 크기 m 트리의 순수 확장인지 검증한다.
+ * 일관성 증명 검증. 같은 증명으로 옛 루트와 새 루트를 동시에 재계산한다.
  *
- * 주의 — 형제가 없는 자리(node 가 짝수이고 lastNode 와 같은 레벨 끝)에서는
- * 증명 원소를 소비하면 안 된다. 소비하면 특정 (m, n) 조합에서만 실패해
- * 몇 개만 테스트하면 통과한다. test/merkle.test.ts 의 모든 m < n 검사가
- * 이 버그를 잡는 장치다.
+ * 함정: 형제가 없는 자리(node 가 짝수이면서 그 레벨의 끝)에서 증명 해시를
+ * 소비하면 안 된다. 소비하면 특정 (m, n) 조합에서만 실패해서 몇 개만 골라
+ * 테스트하면 통과한다. 여기서 실제로 버그가 났었다.
  */
 export function verifyConsistency(
   m: number,

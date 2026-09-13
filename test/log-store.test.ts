@@ -1,4 +1,4 @@
-// 로그 저장소 테스트. 명세 docs/DESIGN.md 6장.
+// 로그 저장소 테스트.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { privateKeyToAccount } from "viem/accounts";
@@ -35,7 +35,7 @@ async function makeLeaf(
 ): Promise<Leaf> {
   counter++;
   const { body } = buildLeafBody({
-    gatekeeper: claimed,
+    gateway: claimed,
     policyHash: "0x" + "9a".repeat(32),
     fields: {
       requester: "0xabc0000000000000000000000000000000000001",
@@ -44,6 +44,7 @@ async function makeLeaf(
       calldata_hash: "0x" + "cd".repeat(32),
       rule_id: "DENYLIST_SANCTIONED",
       severity: "block",
+      verifiability: "verifiable",
     },
     issuedAt,
   });
@@ -63,7 +64,7 @@ test("접수 — 정상 리프를 받고 서명된 접수 확인을 돌려준다
   s.close();
 });
 
-test("접수 — 서명이 gatekeeper 로 안 붙으면 거부한다", async () => {
+test("접수 — 서명이 gateway 로 안 붙으면 거부한다", async () => {
   const s = newStore();
   const leaf = await makeLeaf(evil, gk.address); // gk 를 주장, 실제는 evil 서명
   await assert.rejects(s.submit(leaf), (e: LogError) => e.status === 400);
@@ -79,7 +80,7 @@ test("접수 — 구조가 깨진 리프를 거부한다", async () => {
   s.close();
 });
 
-test("접수 — 등록되지 않은 게이트키퍼를 거부한다", async () => {
+test("접수 — 등록되지 않은 게이트웨이를 거부한다", async () => {
   const s = newStore({ isRegistered: async () => false });
   await assert.rejects(s.submit(await makeLeaf()), (e: LogError) => e.status === 403);
   s.close();

@@ -1,7 +1,5 @@
-// append-only 거절 로그 저장소. 명세 docs/DESIGN.md 6장.
-//
-// 전송 계층과 분리했다. HTTP 라우팅은 log-server.ts 가, 온체인 앵커링은 별도
-// 작업이 맡는다. 이 파일은 접수 검증, 트리 관리, 증명 발급만 한다.
+// append-only 거절 로그 저장소. 접수 검증, 트리 관리, 증명 발급만 한다.
+// HTTP 는 log-server.ts, 온체인 앵커링은 anchor-job.ts 가 맡는다.
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import type { Account } from "viem/accounts";
@@ -35,8 +33,8 @@ export interface LogStoreOptions {
   domain: TypedDataDomain;
   /** LogAck 에 서명한다. 앵커 컨트랙트의 logOperator 와 같은 키여야 한다. */
   operator: Account;
-  /** 접수 검증 7번. 온체인 레지스트리 조회를 주입받는다. */
-  isRegistered: (gatekeeper: Address) => Promise<boolean>;
+  /** 발급자가 등록된 게이트웨이인지. 온체인 레지스트리 조회를 주입받는다. */
+  isRegistered: (gateway: Address) => Promise<boolean>;
   /** 편입 약속 시한. Certificate Transparency 의 MMD 에 해당한다. */
   maxMergeDelaySec?: number;
   /** issued_at 허용 오차 */
@@ -62,10 +60,10 @@ export class LogStore {
         idx        INTEGER PRIMARY KEY,
         leaf_hash  BLOB NOT NULL UNIQUE,
         leaf_bytes BLOB NOT NULL,
-        gatekeeper TEXT NOT NULL,
+        gateway TEXT NOT NULL,
         nonce      BLOB NOT NULL,
         created_at INTEGER NOT NULL,
-        UNIQUE(gatekeeper, nonce)
+        UNIQUE(gateway, nonce)
       );
       CREATE TABLE IF NOT EXISTS anchors (
         tree_size   INTEGER PRIMARY KEY,
@@ -83,33 +81,32 @@ export class LogStore {
   // ---------- 접수 ----------
 
   /**
-   * 접수 검증 7항목. 명세 6.1절 순서를 그대로 따른다.
-   * 1~6 은 리프와 로컬 저장소만으로 검사하고, 원격 조회인 7 을 마지막에 둔다.
+   * 접수 검증 7항목. 1~6 은 로컬만 보고 원격 조회인 7 을 마지막에 둔다.
    * 위조 요청이 쏟아질 때 노드 호출을 아끼기 위해서다.
    */
   async submit(leaf: Leaf): Promise<{ leaf_hash: Hex; log_ack: LogAck }> {
-    // 1. 구조: keys 정렬·필수 집합 일치, field_hashes 길이
+    // 1. 구조
     try {
       validateLeafStructure(leaf);
     } catch (e) {
       throw new LogError(`구조 검증 실패: ${(e as Error).message}`, 400);
     }
 
-    // 2~3. keysRoot·fieldsRoot 를 리프에서 재계산해 EIP-712 서명을 복원
+    // 2~3. keysRoot·fieldsRoot 를 리프에서 재계산해 서명 복원
     if (!(await verifyLeafSignature(leaf, this.opts.domain))) {
-      throw new LogError("서명이 gatekeeper 로 복원되지 않음", 400);
+      throw new LogError("서명이 gateway 로 복원되지 않음", 400);
     }
 
-    // 4. canonical JSON 과 leaf_hash 일치
+    // 4. 저장 바이트와 리프 해시 확정
     const bytes = canonicalBytes(leaf as never);
     const h = leafHash(leaf);
 
-    // 5. nonce 재사용 (동일 게이트키퍼 기준)
+    // 5. nonce 재사용. 같은 리프의 재전송은 idempotent, 다른 리프면 거부.
     const nonce = unhex(leaf.nonce);
-    const gk = leaf.gatekeeper.toLowerCase();
+    const gw = leaf.gateway.toLowerCase();
     const dup = this.db
-      .prepare("SELECT leaf_hash FROM leaves WHERE gatekeeper = ? AND nonce = ?")
-      .get(gk, nonce) as { leaf_hash: Uint8Array } | undefined;
+      .prepare("SELECT leaf_hash FROM leaves WHERE gateway = ? AND nonce = ?")
+      .get(gw, nonce) as { leaf_hash: Uint8Array } | undefined;
     if (dup) {
       // 같은 leaf 의 재전송은 idempotent, 다른 leaf 면 거부
       if (Buffer.from(dup.leaf_hash).equals(h)) {
@@ -127,17 +124,17 @@ export class LogStore {
       );
     }
 
-    // 7. 온체인 레지스트리 등록 여부 — 유일한 원격 호출
-    if (!(await this.opts.isRegistered(leaf.gatekeeper as Address))) {
-      throw new LogError("등록되지 않은 게이트키퍼", 403);
+    // 7. 온체인 레지스트리 등록 — 유일한 원격 호출
+    if (!(await this.opts.isRegistered(leaf.gateway as Address))) {
+      throw new LogError("등록되지 않은 게이트웨이", 403);
     }
 
     const idx = this.size();
     this.db
       .prepare(
-        "INSERT INTO leaves(idx, leaf_hash, leaf_bytes, gatekeeper, nonce, created_at) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO leaves(idx, leaf_hash, leaf_bytes, gateway, nonce, created_at) VALUES(?,?,?,?,?,?)",
       )
-      .run(idx, h, bytes, gk, nonce, now);
+      .run(idx, h, bytes, gw, nonce, now);
 
     return { leaf_hash: hex(h), log_ack: await this.ack(h) };
   }
@@ -163,7 +160,7 @@ export class LogStore {
     return r.n;
   }
 
-  /** 리프 데이터 전체. 트리는 매 호출마다 여기서 재계산한다. */
+  /** 트리는 매 호출마다 여기서 재계산한다. */
   private data(upto?: number): Buffer[] {
     const rows = (
       upto === undefined
@@ -174,13 +171,13 @@ export class LogStore {
     // ponytail: 전체 재계산 O(n). 리프 1만 건 넘어가면 캐시된 부분 트리로 교체.
   }
 
-  /** 앵커 사이에 계속 변하는 오프체인 트리 머리. 서명하지 않는다. */
+  /** 앵커 사이에 계속 변하는 오프체인 머리. 서명하지 않는다. */
   head(): { root: Hex; tree_size: number } {
     const n = this.size();
     return { root: hex(mth(this.data())), tree_size: n };
   }
 
-  /** 특정 크기의 루트. 앵커링 작업이 이 값을 온체인에 올린다. */
+  /** 앵커 작업이 이 값을 온체인에 올린다. */
   rootAt(treeSize: number): Hex {
     if (treeSize < 1 || treeSize > this.size()) {
       throw new LogError(`트리 크기 범위 밖: ${treeSize}`, 400);
@@ -190,7 +187,7 @@ export class LogStore {
 
   // ---------- 앵커 ----------
 
-  /** 온체인 submitRoot 성공 후 호출한다. */
+  /** 온체인 submitRoot 성공 후 호출한다. 로컬 트리와 다르면 거부한다. */
   recordAnchor(treeSize: number, root: Hex, txHash: string | null = null): void {
     const expected = this.rootAt(treeSize);
     if (expected !== root) {
@@ -232,13 +229,9 @@ export class LogStore {
   // ---------- 증명 ----------
 
   /**
-   * 포함 증명. 명세 6장 결정 2번.
-   *
-   * `treeSize` 를 생략하면 그 리프를 덮는 **가장 이른 앵커**를 서버가 고른다.
-   * 앵커는 주기적이라 리프 인덱스 57 을 처음 덮는 앵커가 64 일 수 있고,
-   * 클라이언트가 그 값을 알 방법이 없기 때문이다.
-   *
-   * 검증자는 여기서 돌려준 anchor 를 믿지 않고 체인의 rootByTreeSize 로 재조회한다.
+   * 포함 증명. treeSize 를 생략하면 그 리프를 덮는 가장 이른 앵커를 서버가 고른다.
+   * 앵커는 주기적이라 인덱스 57 을 처음 덮는 앵커가 64 일 수 있고 클라이언트는
+   * 그 값을 알 방법이 없다.
    */
   inclusionProof(
     leafHashHex: string,
@@ -267,7 +260,21 @@ export class LogStore {
     return { anchor, index: row.idx, audit_path: path.map(hex) };
   }
 
-  /** 일관성 증명. 두 앵커 사이에만 발급한다. */
+  /** 번들에 넣을 증명 절반. 리프도 서명도 내주지 않는다. */
+  proofHalf(leafHashHex: string): {
+    inclusion_proof: ReturnType<LogStore["inclusionProof"]>;
+    consistency_proof: ReturnType<LogStore["consistencyProof"]> | null;
+  } {
+    const inclusion = this.inclusionProof(leafHashHex);
+    const latest = this.latestAnchor();
+    const consistency =
+      latest && latest.tree_size > inclusion.anchor.tree_size
+        ? this.consistencyProof(inclusion.anchor.tree_size, latest.tree_size)
+        : null;
+    return { inclusion_proof: inclusion, consistency_proof: consistency };
+  }
+
+  /** 일관성 증명. 앵커된 두 크기 사이에만 발급한다. */
   consistencyProof(from: number, to: number): {
     from_anchor: Anchor;
     to_anchor: Anchor;
@@ -285,7 +292,7 @@ export class LogStore {
     };
   }
 
-  /** 감사자용 전체 조회. 운영 환경에서는 접근 제어가 필요하다. */
+  /** 로컬 도구용. HTTP 로는 노출하지 않는다. */
   entries(start = 0, end?: number): { idx: number; leaf: Leaf }[] {
     const rows = this.db
       .prepare("SELECT idx, leaf_bytes FROM leaves WHERE idx >= ? AND idx <= ? ORDER BY idx")

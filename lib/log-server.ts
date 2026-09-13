@@ -1,5 +1,4 @@
-// 로그 서버 HTTP 계층. 명세 docs/DESIGN.md 6장.
-// 라우팅과 상태 코드만 담당한다. 검증과 트리는 log-store.ts 가 한다.
+// 로그 서버 HTTP 계층. 라우팅과 상태 코드만 담당한다.
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { LogError, type LogStore } from "./log-store.ts";
 import type { Leaf } from "./record.ts";
@@ -63,12 +62,12 @@ export function createLogServer(store: LogStore): Server {
         return send(res, 405, { error: "method not allowed" });
       }
 
-      // 오프체인 트리 머리. 앵커 사이에 계속 변하며 서명하지 않는다.
+      // 오프체인 머리. 앵커 사이에 계속 변하며 서명하지 않는다.
       if (path === "/api/log/head") {
         return send(res, 200, store.head());
       }
 
-      // 체인에 고정된 최신 기준점. 위와 다른 값이므로 경로를 나눠 둔다.
+      // 체인에 고정된 기준점. 위 head 와 다른 값이라 경로를 나눠 둔다.
       if (path === "/api/log/anchors/latest") {
         const a = store.latestAnchor();
         if (!a) throw new LogError("앵커가 아직 없음", 404);
@@ -103,12 +102,15 @@ export function createLogServer(store: LogStore): Server {
         return send(res, 200, store.consistencyProof(from, to));
       }
 
-      // 감사자용. 운영 환경에서는 접근 제어가 필요하다.
-      if (path === "/api/log/entries") {
-        return send(res, 200, {
-          leaves: store.entries(intParam(q.get("start"), "start") ?? 0, intParam(q.get("end"), "end")),
-        });
+      // 번들 조립용. leaf_hash 를 이미 아는 쪽만 부를 수 있어 열거가 안 된다.
+      if (path === "/api/log/bundle") {
+        const leafHash = q.get("leaf_hash");
+        if (!leafHash) throw new LogError("leaf_hash 가 없음", 400);
+        return send(res, 200, store.proofHalf(leafHash));
       }
+
+      // 리프 전체를 내주는 경로는 두지 않는다. 원문은 없지만 게이트웨이·정책
+      // 해시·시각이 드러나고, 검증에 필요하지도 않다.
 
       send(res, 404, { error: "not found" });
     } catch (e) {

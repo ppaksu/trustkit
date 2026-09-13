@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import "../src/LogAnchor.sol";
 
 contract LogAnchorTest is Test {
@@ -80,23 +81,42 @@ contract LogAnchorTest is Test {
         assertEq(r1, bytes32(uint256(0xCC)));
     }
 
-    function test_gatekeeperRegistry() public {
-        a.setGatekeeper(gk, true);
-        assertTrue(a.gatekeepers(gk));
+    function test_gatewayRegistry() public {
+        a.setGateway(gk, true);
+        assertTrue(a.gateways(gk));
         // 운영자는 레지스트리를 못 바꾼다
         vm.prank(op);
         vm.expectRevert(LogAnchor.NotAuthorized.selector);
-        a.setGatekeeper(gk, false);
+        a.setGateway(gk, false);
     }
 
+    /// @dev 가스 수치 대신 저장 슬롯 쓰기 횟수를 본다.
+    ///
+    ///      gasleft() 델타는 --gas-report 계측이 섞여 부풀고, lastCallGas 는
+    ///      --isolate 없이는 revert 한다. 실행 모드에 따라 결과가 달라지는 테스트는
+    ///      신뢰할 수 없다.
+    ///
+    ///      정작 지키려던 불변식은 "정상 상태의 submitRoot 가 슬롯 두 개만
+    ///      건드린다" 이다. rootByTreeSize 새 항목 하나와 lastTreeSize 갱신 하나.
+    ///      슬롯이 늘면 가스도 반드시 는다.
     function test_gas_submitRoot() public {
         vm.startPrank(op);
-        a.submitRoot(bytes32(uint256(1)), 100); // 워밍업
-        uint256 g = gasleft();
+        a.submitRoot(bytes32(uint256(1)), 100); // 워밍업. 첫 SSTORE 는 비싸다
+
+        vm.startStateDiffRecording();
         a.submitRoot(bytes32(uint256(2)), 200);
-        uint256 used = g - gasleft();
+        VmSafe.AccountAccess[] memory diff = vm.stopAndReturnStateDiff();
         vm.stopPrank();
-        emit log_named_uint("submitRoot gas (steady state)", used);
-        assertLt(used, 30000);
+
+        uint256 writes = 0;
+        for (uint256 i = 0; i < diff.length; i++) {
+            for (uint256 j = 0; j < diff[i].storageAccesses.length; j++) {
+                if (diff[i].storageAccesses[j].isWrite && !diff[i].storageAccesses[j].reverted) {
+                    writes++;
+                }
+            }
+        }
+        emit log_named_uint("submitRoot storage writes", writes);
+        assertEq(writes, 2, "rootByTreeSize + lastTreeSize");
     }
 }

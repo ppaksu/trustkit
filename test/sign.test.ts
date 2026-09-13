@@ -1,4 +1,4 @@
-// 서명 계층 테스트. 명세 docs/DESIGN.md 4.3절.
+// 서명 계층 테스트.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { privateKeyToAccount } from "viem/accounts";
@@ -14,6 +14,11 @@ import {
   verifyLogAck,
   SignatureError,
   REJECTION_TYPES,
+  signRequestIntent,
+  verifyRequestIntent,
+  requestIntentHash,
+  requesterSigHash,
+  type RequestIntent,
 } from "../lib/sign.ts";
 
 const KEY_GK = ("0x" + "11".repeat(32)) as `0x${string}`;
@@ -27,9 +32,9 @@ const evil = privateKeyToAccount(KEY_EVIL);
 const ANCHOR = "0x5555555555555555555555555555555555555555" as Address;
 const D = domain(84532, ANCHOR); // Base Sepolia
 
-const build = (gatekeeper: Address = gk.address) =>
+const build = (gateway: Address = gk.address) =>
   buildLeafBody({
-    gatekeeper,
+    gateway,
     policyHash: "0x" + "9a".repeat(32),
     fields: {
       requester: "0xabc0000000000000000000000000000000000001",
@@ -38,6 +43,7 @@ const build = (gatekeeper: Address = gk.address) =>
       calldata_hash: "0x" + "cd".repeat(32),
       rule_id: "DENYLIST_SANCTIONED",
       severity: "block",
+      verifiability: "verifiable",
     },
     issuedAt: 1757203200,
   }).body;
@@ -51,7 +57,7 @@ test("서명 — 왕복 검증이 통과한다", async () => {
   assert.equal(leaf.signature.length, 132, "65바이트 hex");
 });
 
-test("서명 — 다른 키로 서명하면 gatekeeper 와 안 맞는다 (D1 부인 시연의 반대편)", async () => {
+test("서명 — 다른 키로 서명하면 gateway 와 안 맞는다 (D1 부인 시연의 반대편)", async () => {
   const body = build(gk.address); // 리프는 gk 를 주장
   const leaf = await signLeaf(body, evil, D); // 실제 서명은 evil
   assert.equal(await verifyLeafSignature(leaf, D), false);
@@ -91,7 +97,7 @@ test("서명 — 필드 커밋을 바꾸면 검증이 실패한다", async () =>
 
 test("서명 — 알 수 없는 스키마 버전은 서명 이전에 거부된다", () => {
   const body = build();
-  assert.throws(() => rejectionDigest({ ...body, v: 2 } as never, D));
+  assert.throws(() => rejectionDigest({ ...body, v: 3 } as never, D));
 });
 
 test("서명 — schemaVersion 이 digest 에 반영된다 (교차 버전 재사용 차단)", () => {
@@ -99,11 +105,17 @@ test("서명 — schemaVersion 이 digest 에 반영된다 (교차 버전 재사
   // 값이 다르면 digest 가 달라야 한다.
   const body = build();
   const msg = {
-    schemaVersion: 1,
-    gatekeeper: body.gatekeeper as `0x${string}`,
+    schemaVersion: 2,
+    gateway: body.gateway as `0x${string}`,
     policyHash: body.policy_hash as `0x${string}`,
+    policyDataRoot: body.policy_data_root as `0x${string}`,
     keysRoot: ("0x" + "11".repeat(32)) as `0x${string}`,
     fieldsRoot: ("0x" + "22".repeat(32)) as `0x${string}`,
+    requestIntentHash: body.request_intent_hash as `0x${string}`,
+    requesterSigHash: body.requester_sig_hash as `0x${string}`,
+    decidedAtBlock: 0n,
+    stateRoot: body.state_root as `0x${string}`,
+    stateProofRoot: body.state_proof_root as `0x${string}`,
     issuedAt: 1n,
     nonce: ("0x" + "33".repeat(32)) as `0x${string}`,
   };
@@ -112,7 +124,7 @@ test("서명 — schemaVersion 이 digest 에 반영된다 (교차 버전 재사
     domain: D,
     types: REJECTION_TYPES,
     primaryType: "RejectionRecord",
-    message: { ...msg, schemaVersion: 2 },
+    message: { ...msg, schemaVersion: 3 },
   });
   assert.notEqual(one, two);
 });
@@ -207,4 +219,75 @@ test("접수 확인 — 두 서명 타입이 서로 섞이지 않는다", async 
     log_signature: leaf.signature as `0x${string}`,
   };
   assert.equal(await verifyLogAck(fake, gk.address, D), false);
+});
+
+// ---------- 요청 의도 ----------
+
+const requester = privateKeyToAccount(("0x" + "44".repeat(32)) as `0x${string}`);
+
+const intent = (): RequestIntent => ({
+  requester: requester.address,
+  gateway: gk.address,
+  target: "0xdef0000000000000000000000000000000000002",
+  value: "1000000000000000000",
+  calldata_hash: ("0x" + "cd".repeat(32)) as `0x${string}`,
+  issued_at: 1757203200,
+  nonce: ("0x" + "55".repeat(32)) as `0x${string}`,
+});
+
+test("요청 의도 — 왕복 검증이 통과한다", async () => {
+  const i = intent();
+  const sig = await signRequestIntent(i, requester, D);
+  assert.ok(await verifyRequestIntent(i, sig, D));
+});
+
+test("요청 의도 — 값을 하나 바꾸면 복원 주소가 달라진다", async () => {
+  const i = intent();
+  const sig = await signRequestIntent(i, requester, D);
+  assert.equal(await verifyRequestIntent({ ...i, value: "1" }, sig, D), false);
+  assert.equal(await verifyRequestIntent({ ...i, target: gk.address }, sig, D), false);
+});
+
+test("요청 의도 — 유효한 트랜잭션이 아니다", async () => {
+  // EIP-712 서명 대상은 0x19 0x01 로 시작한다. RLP 트랜잭션으로 재해석될 수
+  // 없으므로 게이트웨이가 거절해놓고 자기가 브로드캐스트할 수 없다.
+  const i = intent();
+  const digest = requestIntentHash(i, D);
+  assert.equal(digest.length, 66);
+  // 트랜잭션 해시라면 nonce·gas·chainId 필드가 있어야 하지만 구조체에 없다.
+  const fields = REQUEST_INTENT_FIELDS;
+  assert.ok(!fields.includes("gasLimit"));
+  assert.ok(!fields.includes("maxFeePerGas"));
+});
+
+const REQUEST_INTENT_FIELDS = [
+  "requester",
+  "gateway",
+  "target",
+  "value",
+  "calldataHash",
+  "issuedAt",
+  "nonce",
+];
+
+test("요청 의도 — chainId 가 다르면 digest 가 달라진다", () => {
+  const i = intent();
+  assert.notEqual(requestIntentHash(i, D), requestIntentHash(i, domain(1, ANCHOR)));
+});
+
+test("세 서명 타입이 서로 섞이지 않는다", async () => {
+  const i = intent();
+  const intentSig = await signRequestIntent(i, requester, D);
+  const leaf = await signLeaf(build(), gk, D);
+
+  // 의도 서명을 게이트웨이 서명 자리에 넣어도 통과하면 안 된다.
+  assert.equal(await verifyLeafSignature({ ...leaf, signature: intentSig }, D), false);
+  // 게이트웨이 서명을 의도 서명 자리에 넣어도 마찬가지다.
+  assert.equal(await verifyRequestIntent(i, leaf.signature as `0x${string}`, D), false);
+});
+
+test("요청자 서명 해시 — 서명 한 바이트가 바뀌면 커밋이 달라진다", async () => {
+  const sig = await signRequestIntent(intent(), requester, D);
+  const flipped = (sig.slice(0, -2) + (sig.endsWith("00") ? "01" : "00")) as `0x${string}`;
+  assert.notEqual(requesterSigHash(sig), requesterSigHash(flipped));
 });
