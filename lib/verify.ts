@@ -150,6 +150,13 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
     if (!same) throw new Error("필수 키 집합 불일치");
     keysRoot(leaf.keys);
     fieldsRoot(leaf.field_hashes);
+    // leaf_hash 를 여기서 리프에 묶는다. 안 묶으면 리프는 A 인데 leaf_hash 는
+    // 트리에 실재하는 B 를 가리키는 번들이 5단계까지 통과하고 6단계에서야
+    // "누락" 으로 잘못 진단된다.
+    const computed = `0x${leafHash(leaf).toString("hex")}`;
+    if (computed !== receipt.leaf_hash.toLowerCase()) {
+      throw new Error("leaf_hash 가 리프 본문과 맞지 않음");
+    }
     add(1, "필드 집합과 커밋 루트", "pass", `키 ${leaf.keys.length}개, 누락 없음`);
   } catch (e) {
     add(1, "필드 집합과 커밋 루트", "fail", `필드 누락 또는 버전 불일치: ${(e as Error).message}`);
@@ -258,16 +265,28 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
   } else {
     try {
       const c = await proofs.consistency(anchoredSize!, later);
-      const oldRoot = await chain.rootByTreeSize(c.from_anchor.tree_size);
-      const newRoot = await chain.rootByTreeSize(c.to_anchor.tree_size);
+      // 응답이 말하는 구간을 믿지 않는다. 우리가 요청한 구간으로 고정한다.
+      // 믿으면 공급자가 아무 유효한 구간의 증명이나 돌려주고 정작 이 리프가
+      // 속한 구간은 검증되지 않은 채 7단계가 통과한다.
+      if (c.from_anchor.tree_size !== anchoredSize || c.to_anchor.tree_size !== later) {
+        throw new Error(
+          `요청한 구간이 아님: ${anchoredSize} → ${later} 대신 ${c.from_anchor.tree_size} → ${c.to_anchor.tree_size}`,
+        );
+      }
+      const oldRoot = await chain.rootByTreeSize(anchoredSize!);
+      const newRoot = await chain.rootByTreeSize(later);
+      // 미앵커 크기는 영 루트로 읽힌다. 그대로 대조하면 의미가 없다.
+      if (oldRoot === ZERO32 || newRoot === ZERO32) {
+        throw new Error("두 구간 중 하나가 체인에 앵커되지 않음");
+      }
       const consistent = verifyConsistency(
-        c.from_anchor.tree_size,
-        c.to_anchor.tree_size,
+        anchoredSize!,
+        later,
         unhex(oldRoot),
         unhex(newRoot),
         c.path.map(unhex),
       );
-      if (!add(7, "일관성 증명", consistent ? "pass" : "fail", consistent ? `${c.from_anchor.tree_size} → ${c.to_anchor.tree_size} 순수 확장` : "역사 조작 또는 비순차 확장")) {
+      if (!add(7, "일관성 증명", consistent ? "pass" : "fail", consistent ? `${anchoredSize} → ${later} 순수 확장` : "역사 조작 또는 비순차 확장")) {
         return stop();
       }
     } catch (e) {
@@ -458,6 +477,13 @@ async function staticVerdict(
     return holds
       ? { status: "pass", detail: `${p.field}=${raw} 가 한도 ${p.limit} 을 초과. 사유가 참` }
       : { status: "fail", detail: `${p.field}=${raw} 는 한도 ${p.limit} 이하. 거짓 정적 사유` };
+  }
+
+  // 집합 술어를 인용했으면 목록 루트를 커밋했어야 한다. 안 했으면 구조적으로
+  // 뒷받침할 수 없는 사유를 댄 것이다. 판정 불가로 넘기면 루트를 아예 커밋하지
+  // 않는 게이트웨이가 영구 면제를 받는다. 11단계의 상태 증거 처리와 같은 규칙이다.
+  if (ctx!.leaf.policy_data_root === ZERO32) {
+    return { status: "fail", detail: "목록 사유인데 참조 데이터 루트를 커밋하지 않았다" };
   }
 
   // 집합 소속은 정렬 머클 증명이 필요하다.

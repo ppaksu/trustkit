@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 import { domain, signRequestIntent, requestIntentHash, type RequestIntent } from "../lib/sign.ts";
-import { ZERO32, type PolicyDocument, type PolicyRule } from "../lib/record.ts";
+import { ZERO32, leafHash, type PolicyDocument, type PolicyRule } from "../lib/record.ts";
 import { LogStore } from "../lib/log-store.ts";
 import { Gateway, type TxRequest } from "../sdk/gateway.ts";
 import { verifyReceipt, type ProofSource, type VerifyChain, type PolicyUpdateProof } from "../lib/verify.ts";
@@ -73,6 +73,7 @@ async function setup(
   request: TxRequest,
   forceRule?: PolicyRule,
   withIntent = true,
+  policyDataRoot?: Hex,
 ): Promise<{
   receipt: Receipt;
   chain: VerifyChain;
@@ -86,7 +87,7 @@ async function setup(
     isRegistered: async () => true,
     now: () => NOW,
   });
-  const g = new Gateway({ account: gw, domain: D, policy: POLICY, now: () => NOW });
+  const g = new Gateway({ account: gw, domain: D, policy: POLICY, policyDataRoot, now: () => NOW });
 
   let intent: RequestIntent | undefined;
   let intentSig: Hex | undefined;
@@ -163,6 +164,9 @@ test("검증 — 6단계가 로그가 아니라 체인에서 읽은 루트와 �
 test("검증 — 리프를 한 글자 고치면 2단계에서 걸린다", async () => {
   const s = await setup(req({ value: 10n ** 19n }));
   s.receipt.leaf.policy_hash = ("0x" + "ee".repeat(32)) as Hex;
+  // leaf_hash 도 같이 맞춰준다. 안 그러면 1단계의 결속 검사에서 먼저 걸려서
+  // 정작 보려던 "서명이 정책 해시를 덮는가" 를 확인하지 못한다.
+  s.receipt.leaf_hash = `0x${leafHash(s.receipt.leaf).toString("hex")}` as Hex;
   const r = await run(s);
   assert.equal(r.failedAt, 2, "서명이 정책 해시를 덮는다");
   s.store.close();
@@ -245,9 +249,9 @@ test("검증 — 외부 데이터 의존 사유도 판정 불가다", async () =
 });
 
 test("검증 — 집합 소속 사유는 검사기가 없으면 판정 불가다", async () => {
-  const s = await setup(req({ target: SANCTIONED }));
+  // 루트는 커밋된 상태여야 한다. 커밋 안 했으면 그건 판정 불가가 아니라 실패다.
+  const s = await setup(req({ target: SANCTIONED }), undefined, true, rootOfList([SANCTIONED]) as Hex);
   const r = await run(s);
-  assert.ok(r.ok);
   assert.equal(stepOf(r, 10).status, "unverifiable");
   assert.match(stepOf(r, 10).detail, /정렬 머클/);
   s.store.close();
@@ -363,4 +367,118 @@ test("사전 공표 — 갱신 레코드가 없으면 9단계가 판정 불가�
   const step9 = r.steps.find((x) => x.step === 9)!;
   assert.notEqual(step9.status, "fail");
   s.store.close();
+});
+
+
+// ---------- 감사에서 나온 것들 ----------
+//
+// 아래 넷은 실제로 뚫렸던 경로다. 고친 뒤 회귀를 막으려고 남긴다.
+
+test("감사 — leaf_hash 가 리프 본문과 안 맞으면 1단계에서 걸린다", async () => {
+  // 본문은 A 인데 leaf_hash 는 트리에 실재하는 B 를 가리키는 번들. 안 묶어두면
+  // 5단계까지 통과하고 6단계에서 "누락" 으로 잘못 진단된다.
+  const a = await setup(req({ value: 10n ** 19n }));
+  const b = await setup(req({ value: 2n * 10n ** 19n }));
+  a.receipt.leaf_hash = b.receipt.leaf_hash;
+  const r = await run(a);
+  assert.equal(r.failedAt, 1);
+  assert.match(stepOf(r, 1).detail, /leaf_hash/);
+  a.store.close();
+  b.store.close();
+});
+
+test("감사 — 요청하지 않은 구간의 일관성 증명은 7단계에서 거부된다", async () => {
+  // 공급자가 아무 유효한 구간의 증명이나 돌려줘도 통과하면 안 된다. 그러면 정작
+  // 이 리프가 속한 구간은 검증되지 않은 채 7단계가 통과한다.
+  const s = await setup(req({ value: 10n ** 19n }));
+  const store = s.store;
+  const anchoredAt = store.size(); // setup 이 여기까지 앵커해뒀다
+
+  // 리프를 더 쌓고 다시 앵커해 비교할 나중 구간을 만든다
+  const g2 = new Gateway({ account: gw, domain: D, policy: POLICY, now: () => NOW });
+  for (let i = 0; i < 3; i++) {
+    const x = await g2.handle({
+      request: { requester: requester.address, target: NORMAL, value: BigInt(i + 2), calldata: "0x" as Hex },
+      forceRule: RULES.cap,
+    });
+    await store.submit(x.receipt!.leaf);
+  }
+  const later = store.size();
+  store.recordAnchor(later, store.rootAt(later));
+
+  const evil = {
+    ...s,
+    proofs: {
+      ...s.proofs,
+      // 요청은 (anchoredAt → later) 인데 (anchoredAt → anchoredAt) 를 돌려준다
+      consistency: async () => store.consistencyProof(anchoredAt, anchoredAt) as never,
+      laterAnchorThan: async () => later,
+    },
+  };
+  const r = await run(evil);
+  assert.equal(r.failedAt, 7);
+  assert.match(stepOf(r, 7).detail, /요청한 구간이 아님/);
+  store.close();
+});
+
+test("감사 — 앵커되지 않은 구간으로는 일관성이 통과하지 않는다", async () => {
+  const s = await setup(req({ value: 10n ** 19n }));
+  const evil = {
+    ...s,
+    proofs: {
+      ...s.proofs,
+      consistency: async () => ({
+        from_anchor: { tree_size: 1, root: ZERO32 },
+        to_anchor: { tree_size: 9999, root: ZERO32 },
+        path: [],
+      }) as never,
+      laterAnchorThan: async () => 9999,
+    },
+  };
+  const r = await run(evil);
+  assert.equal(r.failedAt, 7);
+  s.store.close();
+});
+
+test("감사 — 목록 사유를 인용하고 루트를 커밋 안 하면 10단계에서 실패한다", async () => {
+  // 판정 불가로 넘기면 루트를 아예 커밋하지 않는 게이트웨이가 영구 면제를 받는다.
+  const policy: PolicyDocument = {
+    version: 2, rules: [MISS], data_sets: { allowedTargets: [...REAL_LIST] },
+  };
+  const store = new LogStore({
+    path: ":memory:", domain: D, operator: op,
+    isRegistered: async () => true, now: () => NOW,
+  });
+  // policyDataRoot 를 주지 않는다
+  const g = new Gateway({ account: gw, domain: D, policy, now: () => NOW });
+  const receipt = (await g.handle({
+    request: { requester: requester.address, target: IN_LIST, value: 1n, calldata: "0x" as Hex },
+    forceRule: MISS,
+  })).receipt!;
+  receipt.log_ack = (await store.submit(receipt.leaf)).log_ack;
+  const n = store.size();
+  store.recordAnchor(n, store.rootAt(n));
+
+  assert.equal(receipt.leaf.policy_data_root, ZERO32);
+
+  const report = await verifyReceipt({
+    receipt, domain: D,
+    chain: {
+      isRegistered: async () => true,
+      rootByTreeSize: async (size) => (store.anchorAt(size)?.root ?? ZERO32) as Hex,
+      logOperator: async () => op.address,
+    },
+    proofs: {
+      inclusion: async () => store.inclusionProof(receipt.leaf_hash) as never,
+      consistency: async (f, t) => store.consistencyProof(f, t) as never,
+      laterAnchorThan: async () => null,
+    },
+    policy,
+    policyDataProof: policyDataRootChecker(),
+    staticCheck: sortedSetChecker(),
+    now: () => NOW,
+  });
+  assert.equal(report.failedAt, 10);
+  assert.match(report.steps.find((s) => s.step === 10)!.detail, /커밋하지 않았다/);
+  store.close();
 });
