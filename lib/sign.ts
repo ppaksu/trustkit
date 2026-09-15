@@ -20,8 +20,17 @@ import {
   type LeafBody,
 } from "./record.ts";
 
-/** 프로토콜 식별자. 프로젝트명과 분리한다. */
-export const DOMAIN_NAME = "NegLog";
+/**
+ * 프로토콜 식별자. **프로젝트 이름이 아니다.**
+ *
+ * 일부러 브랜드와 끊어놨다. 이 값이 서명 도메인에 섞이므로 배포 후에 바꾸면 그
+ * 전에 발급한 서명이 전부 검증 실패한다. 브랜드명을 여기 넣으면 이름을 바꿀 때마다
+ * 과거 레코드가 죽는다.
+ *
+ * 값은 하는 일을 적어둔 고정 문구다. 지갑이 서명 창에 이 문자열을 띄우므로 사람이
+ * 읽을 수 있어야 한다. 요청자가 무엇에 서명하는지 보고 판단할 수 있어야 하기 때문이다.
+ */
+export const DOMAIN_NAME = "off-chain decision log";
 export const DOMAIN_VERSION = "1";
 
 export class SignatureError extends Error {}
@@ -125,6 +134,9 @@ export async function verifyRequestIntent(
   signature: Hex,
   d: TypedDataDomain,
 ): Promise<boolean> {
+  if (!intent || typeof intent.requester !== "string" || typeof signature !== "string") {
+    return false;
+  }
   let recovered: Address;
   try {
     recovered = await recoverTypedDataAddress({
@@ -298,6 +310,10 @@ export async function verifyLogAck(
   expectedOperator: Address,
   d: TypedDataDomain,
 ): Promise<boolean> {
+  // 번들에서 온 값이라 모양을 믿을 수 없다. 예외가 새면 검증이 크래시한다.
+  if (!ack || typeof ack.log_operator !== "string" || typeof ack.log_signature !== "string") {
+    return false;
+  }
   if (ack.log_operator.toLowerCase() !== expectedOperator.toLowerCase()) return false;
   let recovered: Address;
   try {

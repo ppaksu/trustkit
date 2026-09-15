@@ -117,6 +117,6 @@ contract LogAnchorTest is Test {
             }
         }
         emit log_named_uint("submitRoot storage writes", writes);
-        assertEq(writes, 2, "rootByTreeSize + lastTreeSize");
+        assertEq(writes, 3, "rootByTreeSize + anchoredAt + lastTreeSize");
     }
 }

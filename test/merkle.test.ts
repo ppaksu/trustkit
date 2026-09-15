@@ -100,3 +100,19 @@ test("6 — 음성: 다른 인덱스로 주장하면 포함 증명이 실패한�
     }
   }
 });
+
+// ---------- 감사에서 나온 것 ----------
+
+test("일관성 — m=0 은 루트를 보지 않고 참을 돌려주지 않는다", () => {
+  // 빈 트리는 형식상 무엇과도 일관되지만, 루트 대조 없이 true 를 주면 호출부가
+  // "검증했다" 고 착각한다.
+  assert.equal(verifyConsistency(0, 5, Buffer.alloc(32), Buffer.alloc(32), []), false);
+});
+
+test("포함 — 정수가 아닌 인덱스나 크기는 거부된다", () => {
+  const leaf = Buffer.alloc(32);
+  assert.equal(rootFromInclusionProof(NaN, 4, leaf, []), null);
+  assert.equal(rootFromInclusionProof(1.5, 4, leaf, []), null);
+  assert.equal(rootFromInclusionProof(0, NaN, leaf, []), null);
+  assert.equal(rootFromInclusionProof(0, Infinity, leaf, []), null);
+});

@@ -147,7 +147,24 @@ export function parseBundle(text: string): Bundle {
   for (const k of ["leaf", "leaf_hash", "log_ack", "inclusion_proof", "anchor"] as const) {
     if (b[k] === undefined || b[k] === null) throw new BundleError(`${k} 가 없다`);
   }
+  if (typeof b.leaf_hash !== "string") throw new BundleError("leaf_hash 가 문자열이 아니다");
   if (!Array.isArray(b.disclosures)) throw new BundleError("disclosures 가 배열이 아니다");
+  for (const d of b.disclosures) {
+    if (!Array.isArray(d) || d.length !== 3 || d.some((x) => typeof x !== "string")) {
+      throw new BundleError("disclosure 는 [salt, key, value] 문자열 세 쌍이어야 한다");
+    }
+  }
+
+  const ack = b.log_ack as Partial<LogAck> | undefined;
+  if (
+    typeof ack?.leaf_hash !== "string" ||
+    typeof ack.log_operator !== "string" ||
+    typeof ack.log_signature !== "string" ||
+    !Number.isSafeInteger(ack.received_at) ||
+    !Number.isSafeInteger(ack.promised_by)
+  ) {
+    throw new BundleError("log_ack 의 모양이 올바르지 않다");
+  }
 
   try {
     validateLeafStructure(b.leaf);
@@ -160,6 +177,51 @@ export function parseBundle(text: string): Bundle {
   const computed = `0x${leafHash(b.leaf).toString("hex")}` as Hex;
   if (computed !== b.leaf_hash.toLowerCase()) {
     throw new BundleError(`leaf_hash 가 리프와 맞지 않는다: ${b.leaf_hash} != ${computed}`);
+  }
+
+  // 선택 필드들도 모양을 본다. 여기서 안 막으면 11단계 중간에서 TypeError 로
+  // 죽는다. 검증 도구는 낯선 파일을 먹으므로 전부 통과하거나 전부 거절해야 한다.
+  const proofShape = (p: unknown): boolean =>
+    !!p &&
+    typeof p === "object" &&
+    Number.isSafeInteger((p as InclusionProof).index) &&
+    Number.isSafeInteger((p as InclusionProof).anchor?.tree_size) &&
+    Array.isArray((p as InclusionProof).audit_path) &&
+    (p as InclusionProof).audit_path.every((x) => typeof x === "string");
+
+  if (b.consistency_proof !== null && b.consistency_proof !== undefined) {
+    const c = b.consistency_proof as Partial<ConsistencyProof>;
+    if (
+      !Number.isSafeInteger(c.from_anchor?.tree_size) ||
+      !Number.isSafeInteger(c.to_anchor?.tree_size) ||
+      !Array.isArray(c.path) ||
+      c.path.some((x) => typeof x !== "string")
+    ) {
+      throw new BundleError("consistency_proof 의 모양이 올바르지 않다");
+    }
+  } else {
+    b.consistency_proof = null;
+  }
+
+  if (b.policy_update !== null && b.policy_update !== undefined) {
+    const u = b.policy_update as Partial<PolicyUpdateProof>;
+    if (typeof u.leaf_hash !== "string" || !u.leaf || !proofShape(u.inclusion_proof)) {
+      throw new BundleError("policy_update 의 모양이 올바르지 않다");
+    }
+    try {
+      validateLeafStructure(u.leaf);
+    } catch (e) {
+      throw new BundleError(`policy_update 리프 구조가 깨졌다: ${(e as Error).message}`);
+    }
+    if (typeof u.leaf.gateway !== "string") {
+      throw new BundleError("policy_update 리프의 gateway 가 문자열이 아니다");
+    }
+  } else {
+    b.policy_update = null;
+  }
+
+  if (!proofShape(b.inclusion_proof)) {
+    throw new BundleError("inclusion_proof 의 모양이 올바르지 않다");
   }
 
   const a = b.anchor;

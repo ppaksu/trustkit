@@ -225,3 +225,19 @@ test("비포함 — 빈 목록 증명을 비어 있지 않은 루트에 쓸 수 
   const root = rootOfList(evens(4));
   assert.equal(verifyNonMembership(root, addr(3), { kind: "empty", tree_size: 0 }), false);
 });
+
+test("감사 — 루트 미커밋은 판정 불가가 아니라 실패다", async () => {
+  // 판정 불가로 넘기면 루트를 아예 커밋하지 않는 게이트웨이가 영구 면제를 받는다.
+  const { sortedSetChecker } = await import("../lib/sorted-merkle.ts");
+  const { ZERO32 } = await import("../lib/record.ts");
+  const verdict = await sortedSetChecker()({
+    leaf: { policy_data_root: ZERO32 },
+    disclosures: [],
+    rule: {
+      rule_id: "X", description: "", severity: "review", verifiability: "verifiable",
+      predicate: { kind: "not_in_set", field: "target", set: "s" },
+    },
+    policy: { version: 2, rules: [], data_sets: { s: [addr(1)] } },
+  } as never);
+  assert.equal(verdict.status, "fail");
+});

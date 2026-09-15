@@ -130,11 +130,25 @@ export class LogStore {
     }
 
     const idx = this.size();
-    this.db
-      .prepare(
-        "INSERT INTO leaves(idx, leaf_hash, leaf_bytes, gateway, nonce, created_at) VALUES(?,?,?,?,?,?)",
-      )
-      .run(idx, h, bytes, gw, nonce, now);
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO leaves(idx, leaf_hash, leaf_bytes, gateway, nonce, created_at) VALUES(?,?,?,?,?,?)",
+        )
+        .run(idx, h, bytes, gw, nonce, now);
+    } catch (e) {
+      // 위 5번 검사와 이 INSERT 사이에 7번의 원격 조회가 끼어 있다. 같은 nonce 가
+      // 동시에 들어오면 둘 다 5번을 통과하고 여기서 UNIQUE 제약에 걸린다.
+      // 무결성은 제약이 지켰으니 500 이 아니라 제대로 된 응답을 돌려준다.
+      const again = this.db
+        .prepare("SELECT leaf_hash FROM leaves WHERE gateway = ? AND nonce = ?")
+        .get(gw, nonce) as { leaf_hash: Uint8Array } | undefined;
+      if (again && Buffer.from(again.leaf_hash).equals(h)) {
+        return { leaf_hash: hex(h), log_ack: await this.ack(h) };
+      }
+      if (again) throw new LogError("같은 nonce 로 다른 leaf 를 제출했다", 409);
+      throw new LogError(`저장 실패: ${(e as Error).message}`, 500);
+    }
 
     return { leaf_hash: hex(h), log_ack: await this.ack(h) };
   }
@@ -162,6 +176,14 @@ export class LogStore {
 
   /** 트리는 매 호출마다 여기서 재계산한다. */
   private data(upto?: number): Buffer[] {
+    // 앵커는 크기 N 으로 박혀 있는데 리프가 그보다 적을 수 있다. 운영자가 리프를
+    // 지우면 그 상태가 된다. 그대로 진행하면 머클 재귀가 끝나지 않는다.
+    if (upto !== undefined && upto > this.size()) {
+      throw new LogError(
+        `트리 크기 ${upto} 를 만들 리프가 없다 (현재 ${this.size()}개). 로그에서 리프가 사라졌다`,
+        409,
+      );
+    }
     const rows = (
       upto === undefined
         ? this.db.prepare("SELECT leaf_bytes FROM leaves ORDER BY idx").all()

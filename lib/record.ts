@@ -11,8 +11,12 @@ const sha256 = (...parts: Buffer[]): Buffer =>
 
 const PREFIX_LEAF = Buffer.from([0x00]);
 
-/** 필드 커밋의 도메인 분리자. 다른 해시 용도와 입력 공간을 나눈다. */
-const FIELD_DOMAIN = "neglog/field/v1|";
+/**
+ * 필드 커밋의 도메인 분리자. 다른 해시 용도와 입력 공간을 나눈다.
+ *
+ * DOMAIN_NAME 과 같은 이유로 브랜드와 끊어놨다. 바꾸면 기존 커밋이 전부 달라진다.
+ */
+const FIELD_DOMAIN = "ocdl/field/v1|";
 
 export const SCHEMA_VERSION = 2;
 
@@ -270,12 +274,21 @@ export function leafHash(leaf: Leaf): Buffer {
  * 집합 포함이 아니라 **위치 대조**다. 그래서 문제 필드 하나만 공개해도 드러난다.
  */
 export function verifyDisclosure(leaf: Leaf | LeafBody, d: Disclosure): boolean {
+  // 번들은 신뢰할 수 없는 입력이다. 깨진 disclosure 에 예외를 던지면 검증기가
+  // 판정 대신 크래시한다. 여기서는 거짓만 돌려준다.
+  if (!Array.isArray(d) || d.length !== 3 || d.some((x) => typeof x !== "string")) {
+    return false;
+  }
   const [, key] = d;
   const i = leaf.keys.indexOf(key);
   if (i < 0) return false;
   const expected = leaf.field_hashes[i];
   if (expected === undefined) return false;
-  return fieldCommitment(d).equals(fromHex(expected, "field_hash"));
+  try {
+    return fieldCommitment(d).equals(fromHex(expected, "field_hash"));
+  } catch {
+    return false;
+  }
 }
 
 /** 공개된 값을 키로 찾는다. 없으면 그 단계는 판정 불가가 된다. */
@@ -283,7 +296,9 @@ export function disclosedValue(
   disclosures: readonly Disclosure[],
   key: string,
 ): string | undefined {
-  return disclosures.find((d) => d[1] === key)?.[2];
+  if (!Array.isArray(disclosures)) return undefined;
+  const hit = disclosures.find((d) => Array.isArray(d) && d[1] === key);
+  return typeof hit?.[2] === "string" ? hit[2] : undefined;
 }
 
 // ---------- 정책 문서 ----------

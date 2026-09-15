@@ -21,6 +21,7 @@ export const LOG_ANCHOR_ABI = [
     inputs: [
       { type: "uint64", name: "treeSize", indexed: true },
       { type: "bytes32", name: "root", indexed: false },
+      { type: "uint64", name: "at", indexed: false },
     ],
     anonymous: false,
   },
@@ -45,6 +46,13 @@ export const LOG_ANCHOR_ABI = [
     name: "rootByTreeSize",
     inputs: [{ type: "uint64" }],
     outputs: [{ type: "bytes32" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "anchoredAt",
+    inputs: [{ type: "uint64" }],
+    outputs: [{ type: "uint64" }],
     stateMutability: "view",
   },
   {
@@ -116,6 +124,9 @@ export function connectAnchor(o: ChainOptions) {
     },
     async rootByTreeSize(treeSize) {
       return read<Hex>("rootByTreeSize", [BigInt(treeSize)]);
+    },
+    async anchoredAt(treeSize) {
+      return Number(await read<bigint>("anchoredAt", [BigInt(treeSize)]));
     },
     async submitRoot(root, treeSize) {
       if (!wallet) throw new Error("operator 계정이 없어 submitRoot 를 보낼 수 없다");

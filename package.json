@@ -1,5 +1,5 @@
 {
-  "name": "neglog",
+  "name": "ocdl",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,10 @@
     "test:contracts": "cd contracts && forge test -vv",
     "demo1": "node scripts/demo1-independent.ts",
     "demo2": "node scripts/demo2-tamper.ts",
-    "demo3": "node scripts/demo3-false-reason.ts"
+    "demo3": "node scripts/demo3-false-reason.ts",
+    "regress": "node scripts/regress.ts",
+    "evil": "node scripts/evil-institution.ts",
+    "lifecycle": "node scripts/log-lifecycle.ts"
   },
   "dependencies": {
     "@ethereumjs/mpt": "^10.1.3",

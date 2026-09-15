@@ -178,7 +178,7 @@ async function part2(s: Stack): Promise<void> {
   console.log("  로그가 버린 경우가 갈린다. 이 구분이 완전성의 실체다.");
 }
 
-const dir = mkdtempSync(join(tmpdir(), "neglog-demo2-"));
+const dir = mkdtempSync(join(tmpdir(), "ocdl-demo2-"));
 try {
   await withStack(
     async (s) => {

@@ -13,6 +13,7 @@ import {
   verifyStorageSlot,
   slotValueToBigInt,
   stateProofRoot,
+  stateSlotChecker,
   StateProofError,
   type StateEvidence,
 } from "../lib/state-proof.ts";
@@ -161,4 +162,38 @@ test("묶음 — 요청한 슬롯의 증거가 없으면 거부한다", async ()
     () => checkEvidence(evidence, ("0x" + "00".repeat(31) + "07") as Hex),
     StateProofError,
   );
+});
+
+// ---------- 감사에서 나온 것 ----------
+
+test("상태 커밋 — 키 순서가 바뀌어도 같은 커밋이 나온다", () => {
+  // JSON.stringify 를 쓰면 키 순서를 따라간다. 증거가 어딘가에서 재직렬화되면
+  // 커밋이 어긋나고 "증거가 사후에 바뀌었다" 라는 엉뚱한 판정이 나온다.
+  const reordered: StateEvidence = {
+    account: evidence.account,
+    header: Object.fromEntries(Object.entries(evidence.header).reverse()) as never,
+    block_number: evidence.block_number,
+  };
+  assert.equal(stateProofRoot(reordered), stateProofRoot(evidence));
+});
+
+test("동적 사유 — 정수가 아닌 값을 커밋해도 크래시하지 않는다", async () => {
+  // 공개된 값은 게이트웨이가 커밋한 것이지 정수라는 보장이 없다. 감싸지 않으면
+  // 예외가 검증기 밖으로 새어나가 판정 대신 크래시가 된다.
+  const check = stateSlotChecker(evidence, async () => canonicalHash);
+  const verdict = await check({
+    leaf: {
+      decided_at_block: evidence.block_number,
+      state_proof_root: stateProofRoot(evidence),
+      state_root: evidence.header.stateRoot,
+    },
+    disclosures: [["0x" + "00".repeat(32), "value", "일억원"]],
+    rule: {
+      rule_id: "X", description: "", severity: "block", verifiability: "verifiable",
+      predicate: { kind: "state_slot", account: ACC, slot: SLOT, op: "lt", operand: "value" },
+    },
+    policy: { version: 2, rules: [] },
+  } as never);
+  assert.equal(verdict.status, "fail");
+  assert.match(verdict.detail, /정수가 아님/);
 });

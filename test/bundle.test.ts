@@ -191,3 +191,30 @@ test("증명 공급자 — 없는 일관성 증명을 지어내지 않는다", a
   assert.equal(await src.laterAnchorThan!(1), null);
   await assert.rejects(() => src.consistency(1, 2), BundleError);
 });
+
+
+// ---------- 감사: 낯선 입력 ----------
+//
+// 검증 도구는 누가 보냈는지 모르는 파일을 먹는다. 필드 하나하나를 망가뜨려
+// 3,510가지를 돌려본 결과 크래시가 0건이어야 한다. 아래는 그때 나왔던 유형들이다.
+
+const BROKEN: [string, (b: Bundle) => void][] = [
+  ["leaf_hash 가 숫자", (b) => ((b as never as Record<string, unknown>).leaf_hash = 0)],
+  ["disclosure 가 세 쌍이 아님", (b) => (b.disclosures = [["0x00"] as never])],
+  ["disclosure 원소가 문자열이 아님", (b) => (b.disclosures = [[1, 2, 3] as never])],
+  ["log_ack 필드 누락", (b) => ((b.log_ack as never as Record<string, unknown>).log_operator = undefined)],
+  ["log_ack 시각이 정수가 아님", (b) => ((b.log_ack as never as Record<string, unknown>).received_at = "어제")],
+  ["inclusion_proof 가 통째로 깨짐", (b) => ((b as never as Record<string, unknown>).inclusion_proof = {})],
+  ["audit_path 원소가 문자열이 아님", (b) => (b.inclusion_proof.audit_path = [42 as never])],
+  ["consistency_proof 가 깨짐", (b) => ((b as never as Record<string, unknown>).consistency_proof = { path: 1 })],
+  ["policy_update 가 깨짐", (b) => ((b as never as Record<string, unknown>).policy_update = { leaf: null })],
+  ["anchor 주소가 숫자", (b) => ((b.anchor as never as Record<string, unknown>).address = 1)],
+];
+
+for (const [label, breakIt] of BROKEN) {
+  test(`낯선 입력 — ${label} 은 BundleError 로 거절된다`, async () => {
+    const b = await make();
+    breakIt(b);
+    assert.throws(() => parseBundle(JSON.stringify(b)), BundleError, label);
+  });
+}

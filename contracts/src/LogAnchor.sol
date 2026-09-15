@@ -16,9 +16,15 @@ contract LogAnchor {
     /// @dev submitRoot 가 영 루트를 거부하므로 0 을 부재 값으로 써도 안전하다.
     mapping(uint64 => bytes32) public rootByTreeSize;
 
+    /// @notice treeSize => 그 루트가 박힌 블록의 시각. 0 이면 미앵커.
+    /// @dev 체인이 이 시스템의 유일한 외부 시계다. 이게 없으면 게이트웨이와 로그가
+    ///      짜고 발급 시각을 과거로 적어도 반박할 근거가 없다. 리프는 앵커보다
+    ///      먼저 만들어졌으므로 이 값이 발급 시각의 상한이 된다.
+    mapping(uint64 => uint64) public anchoredAt;
+
     mapping(address => bool) public gateways;
 
-    event RootAnchored(uint64 indexed treeSize, bytes32 root);
+    event RootAnchored(uint64 indexed treeSize, bytes32 root, uint64 at);
     event GatewaySet(address indexed gateway, bool allowed);
 
     error NotAuthorized();
@@ -40,8 +46,9 @@ contract LogAnchor {
         if (root == bytes32(0) || treeSize == 0) revert InvalidRoot();
         if (treeSize <= lastTreeSize) revert TreeSizeNotIncreasing();
         rootByTreeSize[treeSize] = root;
+        anchoredAt[treeSize] = uint64(block.timestamp);
         lastTreeSize = treeSize;
-        emit RootAnchored(treeSize, root);
+        emit RootAnchored(treeSize, root, uint64(block.timestamp));
     }
 
     /// @notice 가장 최근에 고정된 기준점. 앵커가 없으면 (0, 0).

@@ -272,3 +272,42 @@ function consistencyPathAfterTamper(s: LogStore, from: number, to: number): Buff
 }
 
 import { consistencyProof as consistencyProofRaw } from "../lib/merkle.ts";
+
+// ---------- 감사: 리프가 사라진 상태 ----------
+
+test("리프 유실 — 앵커된 크기만큼 리프가 없으면 명확한 오류를 낸다", async () => {
+  // 운영자가 리프를 지우면 앵커는 크기 N 으로 박혀 있는데 리프는 그보다 적다.
+  // 막지 않으면 머클 재귀가 끝나지 않아 스택 오버플로로 프로세스가 죽는다.
+  const { DatabaseSync } = await import("node:sqlite");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const dir = mkdtempSync(join(tmpdir(), "ocdl-loss-"));
+  const path = join(dir, "log.db");
+  const s = newStore({ path });
+  try {
+    for (let i = 0; i < 6; i++) await s.submit(await makeLeaf());
+    s.recordAnchor(6, s.rootAt(6));
+
+    const db = new DatabaseSync(path);
+    db.prepare("DELETE FROM leaves WHERE idx IN (2, 4)").run();
+    db.close();
+
+    assert.equal(s.size(), 4);
+    // 스택 오버플로가 아니라 LogError 여야 한다
+    assert.throws(() => s.rootAt(6), LogError);
+    assert.throws(() => s.consistencyProof(6, 6), LogError);
+    assert.throws(() => s.inclusionProof("0x" + "11".repeat(32), 6), LogError);
+  } finally {
+    s.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("머클 — 크기 밖 인덱스로 증명을 만들려 하면 즉시 거부된다", async () => {
+  const { inclusionPath } = await import("../lib/merkle.ts");
+  const d = [Buffer.alloc(4), Buffer.alloc(4)];
+  assert.throws(() => inclusionPath(2, d), RangeError);
+  assert.throws(() => inclusionPath(-1, d), RangeError);
+});

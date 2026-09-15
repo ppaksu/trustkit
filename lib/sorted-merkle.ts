@@ -219,10 +219,13 @@ export function sortedSetChecker(): (ctx: PredicateContext) => Promise<Verdict> 
 
     const tree = buildSortedTree(list);
     const root = sortedRoot(tree);
+    // verify.ts 의 staticVerdict 가 같은 검사를 먼저 한다. 여기 남겨두는 이유는
+    // 이 검사기를 직접 부르는 경로에서도 같은 답이 나와야 하기 때문이다.
+    // 두 곳의 판정이 어긋나면 그게 다음 회귀다.
     if (ctx.leaf.policy_data_root === ZERO32) {
       return {
-        status: "unverifiable",
-        detail: "게이트웨이가 참조 데이터 루트를 커밋하지 않았다",
+        status: "fail",
+        detail: "목록 사유인데 참조 데이터 루트를 커밋하지 않았다",
       };
     }
     if (root !== ctx.leaf.policy_data_root.toLowerCase()) {
@@ -282,10 +285,10 @@ export function policyDataRootChecker(): (
   return async (root, rule, policy) => {
     const p = rule.predicate;
     if (!p || (p.kind !== "in_set" && p.kind !== "not_in_set")) {
-      return {
-        status: "unverifiable",
-        detail: "집합을 참조하지 않는 규칙이라 참조 데이터 루트를 대조할 수 없다",
-      };
+      // 대조할 게 없는 것과 대조하지 못한 것은 다르다. 이 규칙은 목록을 쓰지
+      // 않으므로 9단계가 볼 것은 이미 다 봤다. 판정 불가로 적으면 무언가를
+      // 놓친 것처럼 읽힌다.
+      return { status: "pass", detail: "이 규칙은 참조 목록을 쓰지 않는다" };
     }
     const list = policy.data_sets?.[p.set];
     if (!list) {

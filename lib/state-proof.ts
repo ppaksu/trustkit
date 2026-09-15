@@ -7,6 +7,7 @@
 // 트라이 walk 은 직접 구현하지 않는다. 표준 형식 파서이지 이 프로젝트의 주장이
 // 걸린 자료구조가 아니다.
 import { createHash } from "node:crypto";
+import { canonicalBytes, type JsonValue } from "./jcs.ts";
 import { verifyMerkleProof } from "@ethereumjs/mpt";
 import { hexToBytes, bytesToHex } from "@ethereumjs/util";
 import { keccak256, toRlp, type Hex } from "viem";
@@ -154,8 +155,11 @@ export interface StateEvidence {
 
 /** 리프의 state_proof_root. 증거 바꿔치기를 막는다. */
 export function stateProofRoot(e: StateEvidence): Hex {
-  const body = JSON.stringify([e.block_number, e.header, e.account]);
-  return `0x${createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex")}`;
+  // JSON.stringify 를 쓰면 안 된다. 키 순서를 그대로 따라가므로 같은 증거를
+  // 다시 직렬화했을 때 순서가 달라지면 커밋이 어긋나고, 증상은 "증거가 사후에
+  // 바뀌었다" 라는 엉뚱한 판정으로 나온다. 해시 입력은 전부 JCS 를 거친다.
+  const body = canonicalBytes([e.block_number, e.header, e.account] as unknown as JsonValue);
+  return `0x${createHash("sha256").update(body).digest("hex")}`;
 }
 
 export interface StateCheckResult {
@@ -259,7 +263,15 @@ export function stateSlotChecker(
       return { status: "unverifiable", detail: `${p.operand} 가 공개되지 않았다` };
     }
 
-    const rhs = BigInt(operand);
+    // 공개된 값은 게이트웨이가 커밋한 것이지 정수라는 보장이 없다. 감싸지 않으면
+    // 예외가 검증기 밖으로 새어나가 판정 대신 크래시가 된다. 10단계의 gt 처리와
+    // 같은 규칙이다.
+    let rhs: bigint;
+    try {
+      rhs = BigInt(operand);
+    } catch {
+      return { status: "fail", detail: `${p.operand} 가 정수가 아님: ${operand}` };
+    }
     const holds = p.op === "lt" ? result.slotValue < rhs : result.slotValue >= rhs;
     const sign = p.op === "lt" ? "<" : ">=";
     const detail = `블록 ${evidence.block_number} 슬롯 값 ${result.slotValue} ${sign} ${rhs} 가 ${holds ? "참" : "거짓"}`;

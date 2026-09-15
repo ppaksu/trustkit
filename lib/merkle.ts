@@ -14,6 +14,7 @@ const sha256 = (...parts: Buffer[]): Buffer =>
 
 /** RFC 가 정한 분할 지점. 다르게 가르면 같은 데이터에서 다른 루트가 나온다. */
 function largestPow2Below(n: number): number {
+  if (n < 2) throw new RangeError(`분할할 수 없는 크기: ${n}`);
   let k = 1;
   while (k * 2 < n) k *= 2;
   return k;
@@ -34,6 +35,9 @@ export function mth(d: Buffer[]): Buffer {
 
 /** 리프 m 의 포함 증명. 루트까지 올라가며 만나는 형제 해시들. */
 export function inclusionPath(m: number, d: Buffer[]): Buffer[] {
+  // 호출부가 트리 크기보다 큰 인덱스를 주면 재귀가 끝나지 않는다. 로그에서
+  // 리프가 사라졌을 때 실제로 그 상태가 된다.
+  if (m < 0 || m >= d.length) throw new RangeError(`인덱스 ${m} 가 크기 ${d.length} 밖이다`);
   if (d.length === 1) return [];
   const k = largestPow2Below(d.length);
   if (m < k) return [...inclusionPath(m, d.slice(0, k)), mth(d.slice(k))];
@@ -46,6 +50,7 @@ export function consistencyProof(m: number, d: Buffer[]): Buffer[] {
 }
 
 function subproof(m: number, d: Buffer[], b: boolean): Buffer[] {
+  if (m < 0 || m > d.length) throw new RangeError(`구간 ${m} 이 크기 ${d.length} 밖이다`);
   if (m === d.length) return b ? [] : [mth(d)];
   const k = largestPow2Below(d.length);
   if (m <= k) return [...subproof(m, d.slice(0, k), b), mth(d.slice(k))];
@@ -64,6 +69,7 @@ export function rootFromInclusionProof(
   leaf: Buffer,
   proof: Buffer[],
 ): Buffer | null {
+  if (!Number.isSafeInteger(leafIndex) || !Number.isSafeInteger(treeSize)) return null;
   if (leafIndex < 0 || treeSize < 0 || leafIndex >= treeSize) return null;
   let node = leafIndex;
   let lastNode = treeSize - 1;
@@ -99,9 +105,12 @@ export function verifyConsistency(
   newRoot: Buffer,
   proof: Buffer[],
 ): boolean {
+  if (!Number.isSafeInteger(m) || !Number.isSafeInteger(n)) return false;
   if (m < 0 || n < m) return false;
   if (m === n) return proof.length === 0 && oldRoot.equals(newRoot);
-  if (m === 0) return proof.length === 0;
+  // 빈 트리는 형식상 무엇과도 일관되지만, 루트를 보지 않고 참을 돌려주면
+  // 호출부가 "검증했다" 고 착각한다. 의미 있는 대조가 아니므로 거부한다.
+  if (m === 0) return false;
   if (proof.length === 0) return false;
 
   let node = m - 1;

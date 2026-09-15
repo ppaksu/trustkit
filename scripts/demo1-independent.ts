@@ -27,6 +27,10 @@ const REQUESTED = 1n * 10n ** 18n;
 async function run(s: Stack, dir: string): Promise<void> {
   heading("1부 — 체인에 아무것도 남지 않는 거절");
 
+  // 참조 목록을 먼저 공표한다. 이 데모의 사유는 목록을 쓰지 않지만, 게이트웨이는
+  // 자기 참조 데이터를 판단과 무관하게 공표해둔다.
+  await s.publishList(DEMO_POLICY.data_sets!.allowedTargets);
+
   const evidence = await s.stateEvidenceFor(ENTRYPOINT as Address, DEPOSIT_SLOT as Hex, ACTUAL_DEPOSIT);
   step("EntryPoint 예치금 심기", `블록 ${evidence.block_number}, 슬롯 값 ${ACTUAL_DEPOSIT}`);
 
@@ -119,7 +123,7 @@ async function run(s: Stack, dir: string): Promise<void> {
   console.log("  그리고 11단계가 말한다. 번들러가 댄 예치금 부족은 거짓이다.");
 }
 
-const dir = mkdtempSync(join(tmpdir(), "neglog-demo1-"));
+const dir = mkdtempSync(join(tmpdir(), "ocdl-demo1-"));
 try {
   await withStack(async (s) => {
     console.log("\n데모 1 — 기관 무접촉 검증 (독립 검증 가능성 · 부인 방지)");

@@ -44,6 +44,8 @@ export interface VerifyChain {
   isRegistered(gateway: Address): Promise<boolean>;
   rootByTreeSize(treeSize: number): Promise<Hex>;
   logOperator(): Promise<Address>;
+  /** 그 루트가 박힌 블록의 시각. 발급 시각의 상한이 된다. 없으면 시각 검사를 건너뛴다. */
+  anchoredAt?(treeSize: number): Promise<number>;
 }
 
 export interface InclusionProof {
@@ -122,6 +124,18 @@ export interface VerifyReport {
   failedAt: number | null;
   /** 판정 불가로 남은 단계. */
   unverifiable: number[];
+  /**
+   * 사유의 참거짓을 실제로 따졌는가.
+   *
+   * ok 만 보면 "확인했고 맞다" 와 "확인할 게 아무것도 없었다" 가 구분되지 않는다.
+   * 전부 재량 사유로 발급하거나 아무것도 공개하지 않으면 10·11 이 판정 불가인 채로
+   * ok 가 참이 된다. 그건 검증이 아니라 미검증이다.
+   */
+  reasonChecked: boolean;
+  /** 게이트웨이와 로그 운영자가 같은 주체다. 접수 서명이 책임을 가르지 못한다. */
+  selfLogged: boolean;
+  /** 앵커 시각과 발급 시각의 차이(초). null 이면 확인 못 함. */
+  antedatedBy: number | null;
 }
 
 const unhex = (s: string) => Buffer.from(s.replace(/^0x/, ""), "hex");
@@ -133,12 +147,14 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
   const leaf = receipt.leaf;
   const steps: StepResult[] = [];
   let hasInclusion = false;
+  let selfLogged = false;
+  let antedated: number | null = null;
 
   const add = (step: number, name: string, status: StepStatus, detail: string): boolean => {
     steps.push({ step, name, status, detail });
     return status !== "fail";
   };
-  const stop = () => finish(steps, receipt, hasInclusion, now);
+  const stop = () => finish(steps, receipt, hasInclusion, now, selfLogged, antedated);
 
   // 1. 필드 집합과 리프 구조
   try {
@@ -174,6 +190,12 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
   if (!add(3, "레지스트리 등록", registered ? "pass" : "fail", registered ? "등록된 게이트웨이" : "신뢰할 수 없는 발급자")) {
     return stop();
   }
+
+  // 게이트웨이와 로그 운영자가 같은 주체면 접수 서명의 책임 분리가 성립하지 않는다.
+  // 실패로 처리하진 않는다. 파일럿 배포에서는 정상 구성일 수 있다. 다만 보고서에
+  // 반드시 드러나야 한다.
+  const operatorAddr = await chain.logOperator();
+  selfLogged = lower(leaf.gateway) === lower(operatorAddr);
 
   // 4. 요청자 서명. 없으면 실패가 아니라 판정 불가다. 서명 없이 발급하는 것도
   //    가능한 구성이고, 대신 요청 사실의 부인을 막지 못한다.
@@ -217,9 +239,19 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
     add(5, "로그 접수 확인", "fail", "접수 확인이 없음. 게이트웨이가 제출하지 않았다");
     return stop();
   }
-  const operator = await chain.logOperator();
-  const ackOk = await verifyLogAck(receipt.log_ack, operator, domain);
-  if (!add(5, "로그 접수 확인", ackOk ? "pass" : "fail", ackOk ? `운영자 ${operator}` : "접수 확인 서명이 유효하지 않음")) {
+  const ackOk = await verifyLogAck(receipt.log_ack, operatorAddr, domain);
+  if (!add(5, "로그 접수 확인", ackOk ? "pass" : "fail", ackOk ? `운영자 ${operatorAddr}` : "접수 확인 서명이 유효하지 않음")) {
+    return stop();
+  }
+  // 발급이 접수보다 나중일 수 없다. 게이트웨이가 혼자 시각을 위조하면 로그가
+  // 서명한 접수 시각과 어긋난다.
+  if (leaf.issued_at > receipt.log_ack.received_at) {
+    steps[steps.length - 1] = {
+      step: 5,
+      name: "로그 접수 확인",
+      status: "fail",
+      detail: `발급 시각이 접수보다 나중이다 (${leaf.issued_at} > ${receipt.log_ack.received_at})`,
+    };
     return stop();
   }
   if (receipt.log_ack.leaf_hash.toLowerCase() !== receipt.leaf_hash.toLowerCase()) {
@@ -250,6 +282,18 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
     const match = recomputed !== null && `0x${recomputed.toString("hex")}` === chainRoot.toLowerCase();
     hasInclusion = match;
     anchoredSize = p.anchor.tree_size;
+
+    // 체인이 유일한 외부 시계다. 리프는 앵커보다 먼저 만들어졌으므로 앵커 블록
+    // 시각이 발급 시각의 상한이다. 이걸 안 보면 게이트웨이와 로그가 짜고 발급
+    // 시각을 과거로 적어도 반박할 근거가 없다.
+    if (match && chain.anchoredAt) {
+      const at = await chain.anchoredAt(p.anchor.tree_size);
+      if (at > 0 && leaf.issued_at > at) {
+        add(6, "포함 증명", "fail", `발급 시각이 앵커보다 나중이다 (${leaf.issued_at} > ${at})`);
+        return stop();
+      }
+      if (at > 0) antedated = at - leaf.issued_at;
+    }
     if (!add(6, "포함 증명", match ? "pass" : "fail", match ? `체인 루트와 일치, tree_size=${p.anchor.tree_size}` : "체인 루트로 재계산되지 않음")) {
       return stop();
     }
@@ -384,13 +428,32 @@ async function checkPolicyUpdate(
   if (!p) {
     return { status: "unverifiable", detail: "목록 갱신 레코드가 번들에 없어 사전 공표를 확인할 수 없다." };
   }
+  // parseBundle 을 거치지 않는 호출부가 있으므로 여기서도 모양을 본다.
+  if (
+    !p.leaf ||
+    typeof p.leaf_hash !== "string" ||
+    typeof p.leaf.gateway !== "string" ||
+    typeof p.leaf.policy_data_root !== "string" ||
+    !p.inclusion_proof ||
+    !Number.isSafeInteger(p.inclusion_proof.index) ||
+    !Number.isSafeInteger(p.inclusion_proof.anchor?.tree_size) ||
+    !Array.isArray(p.inclusion_proof.audit_path) ||
+    p.inclusion_proof.audit_path.some((x) => typeof x !== "string")
+  ) {
+    return { status: "fail", detail: "갱신 레코드의 모양이 올바르지 않다." };
+  }
+  try {
+    validateLeafStructure(p.leaf);
+  } catch (e) {
+    return { status: "fail", detail: `갱신 레코드 구조가 깨졌다: ${(e as Error).message}` };
+  }
   if (p.leaf.type !== "policy_update") {
     return { status: "fail", detail: "갱신 레코드가 아니다." };
   }
   if (lower(p.leaf.gateway) !== lower(leaf.gateway)) {
     return { status: "fail", detail: "다른 게이트웨이의 갱신 레코드다." };
   }
-  if (p.leaf.policy_data_root !== leaf.policy_data_root) {
+  if (p.leaf.policy_data_root.toLowerCase() !== leaf.policy_data_root.toLowerCase()) {
     return { status: "fail", detail: "판단이 가리키는 루트가 공표된 루트와 다르다." };
   }
   // 공표가 판단보다 늦으면 사후에 끼워 맞춘 것이다.
@@ -518,14 +581,21 @@ function finish(
   receipt: Receipt,
   hasInclusion: boolean,
   now: number,
+  selfLogged = false,
+  antedatedBy: number | null = null,
 ): VerifyReport {
   const failed = steps.find((s) => s.status === "fail");
+  const statusOf = (n: number) => steps.find((s) => s.step === n)?.status;
   return {
     ok: !failed,
     steps,
     fault: assignFault(receipt, hasInclusion, now),
     failedAt: failed ? failed.step : null,
     unverifiable: steps.filter((s) => s.status === "unverifiable").map((s) => s.step),
+    // 10 이나 11 중 하나라도 실제로 판정됐어야 사유를 따진 것이다.
+    reasonChecked: statusOf(10) === "pass" || statusOf(11) === "pass",
+    selfLogged,
+    antedatedBy,
   };
 }
 
@@ -541,8 +611,21 @@ export function formatReport(r: VerifyReport): string {
     (s) => `  ${LABEL[s.status].padEnd(5)}  ${s.step}. ${s.name}\n            ${s.detail}`,
   );
   lines.push("");
-  lines.push(`  판정: ${r.ok ? "검증 통과" : `${r.failedAt}단계에서 실패`}`);
+  if (!r.ok) {
+    lines.push(`  판정: ${r.failedAt}단계에서 실패`);
+  } else if (!r.reasonChecked) {
+    // "검증 통과" 로 적으면 안 된다. 사유를 하나도 못 따졌다는 뜻이다.
+    lines.push("  판정: 조작 흔적 없음. 다만 거절 사유는 검증되지 않았다");
+  } else {
+    lines.push("  판정: 검증 통과. 사유까지 확인됨");
+  }
   if (r.unverifiable.length) lines.push(`  판정 불가 단계: ${r.unverifiable.join(", ")}`);
+  if (r.selfLogged) {
+    lines.push("  주의: 게이트웨이와 로그 운영자가 같은 주체다. 접수 서명이 책임을 가르지 못한다");
+  }
+  if (r.antedatedBy !== null && r.antedatedBy > 86_400) {
+    lines.push(`  주의: 발급 시각이 앵커보다 ${Math.floor(r.antedatedBy / 86_400)}일 앞선다. 사후 생성 가능성`);
+  }
   lines.push(`  책임: ${r.fault}`);
   return lines.join("\n");
 }
