@@ -96,8 +96,8 @@ contract LogAnchorTest is Test {
     ///      --isolate 없이는 revert 한다. 실행 모드에 따라 결과가 달라지는 테스트는
     ///      신뢰할 수 없다.
     ///
-    ///      정작 지키려던 불변식은 "정상 상태의 submitRoot 가 슬롯 두 개만
-    ///      건드린다" 이다. rootByTreeSize 새 항목 하나와 lastTreeSize 갱신 하나.
+    ///      정작 지키려던 불변식은 "정상 상태의 submitRoot 가 슬롯 세 개만
+    ///      건드린다" 이다. rootByTreeSize 와 anchoredAt 새 항목, lastTreeSize 갱신.
     ///      슬롯이 늘면 가스도 반드시 는다.
     function test_gas_submitRoot() public {
         vm.startPrank(op);

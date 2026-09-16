@@ -66,6 +66,68 @@ audit path가 이웃의 해시를 지나가기 때문이다. 조작한 루트를
 `demo3`은 1~9단계가 전부 통과한다. 서명도 포함 증명도 정책 인용도 정상이다. 거짓말은
 10단계에서만 드러난다.
 
+## 손으로 돌리기
+
+데모 스크립트는 한 프로세스에서 전부 띄운다. 각 주체를 따로 세우려면 이렇게 한다.
+
+```bash
+anvil --port 8545
+
+cd contracts && LOG_OPERATOR=$OP_ADDR forge script script/Deploy.s.sol \
+  --rpc-url http://127.0.0.1:8545 --broadcast --private-key $OWNER_KEY
+
+cast send $ANCHOR "setGateway(address,bool)" $GW_ADDR true \
+  --rpc-url http://127.0.0.1:8545 --private-key $OWNER_KEY
+```
+
+로그 서버와 앵커 작업은 별도 프로세스다. 앵커는 차단 경로 밖에서 주기적으로 돈다.
+
+```bash
+node cli/log-server.ts --db ./log.db --port 8788 \
+  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --operator-key $OP_KEY
+
+node cli/anchor.ts --db ./log.db --anchor $ANCHOR \
+  --rpc http://127.0.0.1:8545 --operator-key $OP_KEY --watch 15
+```
+
+게이트웨이는 세 단계다. 목록을 판단보다 **먼저** 공표해야 검증 9단계가 통과한다.
+
+```bash
+node cli/gateway.ts publish-list --anchor $ANCHOR --rpc http://127.0.0.1:8545 \
+  --log http://127.0.0.1:8788 --gateway-key $GW_KEY --out policy-update.json
+
+node cli/gateway.ts reject --target 0x…cafe --value 5000000000000000000 \
+  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
+  --gateway-key $GW_KEY --requester-key $RQ_KEY --out receipt.json
+
+node cli/gateway.ts bundle --receipt receipt.json --out bundle.json --wait 90 \
+  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
+  --gateway-key $GW_KEY
+```
+
+거절과 번들이 나뉘는 게 핵심이다. 거절 직후에는 그 리프를 덮는 앵커가 아직 없어서
+포함 증명이 안 나온다. 요청자는 영수증을 먼저 받아두고 앵커가 올라간 뒤에 번들을
+굳힌다. `--wait`가 그때까지 기다리고, 실제 걸린 시간을 로그가 서명한 상한과 나란히
+찍는다.
+
+```
+편입까지 12초  (로그가 서명한 상한 3600초)
+```
+
+이제 로그 서버를 내려도 된다.
+
+```bash
+node cli/verify-rejection.ts bundle.json --rpc http://127.0.0.1:8545
+```
+
+종료 코드는 통과 0, 실패 1, 번들이나 RPC 자체가 깨졌으면 2다. 판정 불가 단계가
+있어도 다른 단계가 다 통과하면 0이고, 보고서가 어느 단계를 못 따졌는지 적는다.
+`--json`을 주면 보고서를 기계가 읽는다.
+
+부하를 보려면 `node cli/seed.ts --count 20000 …`으로 먼저 채운다. 2만 건이면 DB는
+42MB지만 번들은 8.8KB다. 포함 증명 경로가 로그 스케일로만 자라기 때문이다.
+초당 180건쯤 들어가고 병목은 서명이다.
+
 ## 어떻게 되어 있나
 
 ![컴포넌트와 신뢰 경계](docs/architecture.svg)
@@ -249,9 +311,14 @@ lib/
   chain.ts          앵커 컨트랙트 바인딩
   anchor-job.ts     주기 앵커링
 sdk/gateway.ts      정책 평가, 상태 증거 수집, 레코드 서명
-cli/                독립 검증 도구
+cli/
+  verify-rejection.ts  독립 검증 도구
+  log-server.ts        로그 서버
+  gateway.ts           목록 공표, 거절, 번들 조립
+  anchor.ts            앵커링
+  seed.ts              대량 적재
 contracts/          LogAnchor.sol
-scripts/            데모 3종
+scripts/            데모 3종, 감사 시나리오
 ```
 
 앵커 컨트랙트가 짧다. 루트 고정과 레지스트리뿐이다.
@@ -262,13 +329,17 @@ function submitRoot(bytes32 root, uint64 treeSize) external {
     if (root == bytes32(0) || treeSize == 0) revert InvalidRoot();
     if (treeSize <= lastTreeSize) revert TreeSizeNotIncreasing();
     rootByTreeSize[treeSize] = root;
+    anchoredAt[treeSize] = uint64(block.timestamp);
     lastTreeSize = treeSize;
-    emit RootAnchored(treeSize, root);
+    emit RootAnchored(treeSize, root, uint64(block.timestamp));
 }
 ```
 
 `treeSize <= lastTreeSize`를 막는 한 줄이 롤백과 같은 크기 재앵커를 동시에 막는다.
-앵커 트랜잭션 gasUsed는 50,984다. 레코드 건수와 무관하게 앵커 1회당 이 값이다.
+`anchoredAt`이 발급 시각의 상한을 준다. 검증 6단계의 시각 검사가 여기에 걸려 있다.
+
+앵커 1회에 슬롯 세 개를 쓴다. gasUsed 73,115. 레코드 건수와 무관하다. 2만 건을 한
+루트로 묶어도 같은 값이다.
 
 ## RFC 9162가 아니라 6962를 쓰는 이유
 
@@ -279,7 +350,7 @@ function submitRoot(bytes32 root, uint64 treeSize) external {
 ## 테스트
 
 ```bash
-npm test               # 180
+npm test               # 182
 npm run test:contracts #   9
 
 npm run lifecycle      # 정상 / 수정 / 삭제 순으로 로그를 흔든다
