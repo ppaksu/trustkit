@@ -14,6 +14,7 @@ export interface AnchorJobOptions {
   minBatch?: number;
   intervalMs?: number;
   onError?: (e: unknown) => void;
+  onResult?: (r: AnchorResult) => void;
 }
 
 export interface AnchorResult {
@@ -94,15 +95,16 @@ export function startAnchorJob(o: AnchorJobOptions): { stop(): void } {
     if (running) return; // 앞 회차가 아직 안 끝났으면 건너뛴다
     running = true;
     try {
-      await anchorOnce(o);
+      o.onResult?.(await anchorOnce(o));
     } catch (e) {
       (o.onError ?? ((err) => process.emitWarning(`앵커링 실패: ${err}`)))(e);
     } finally {
       running = false;
     }
   };
+  // 타이머를 unref 하지 않는다. 앵커 CLI 는 이 타이머 말고 이벤트 루프를
+  // 붙잡는 게 없어서, unref 하면 첫 회차 직후 프로세스가 그냥 끝난다.
   const timer = setInterval(tick, intervalMs);
-  timer.unref?.();
   void tick();
   return {
     stop() {

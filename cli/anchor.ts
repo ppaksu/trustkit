@@ -50,7 +50,7 @@ if (watch >= 0) {
   const sec = Number(process.argv[watch + 1] ?? "30");
   console.log(`${sec}초마다 앵커한다. Ctrl-C 로 멈춤.`);
   const job = startAnchorJob({ store, chain: anchorChain, intervalMs: sec * 1000,
-    onError: (e) => console.error(`앵커 실패: ${e}`) });
+    onResult: show, onError: (e) => console.error(`앵커 실패: ${e}`) });
   process.on("SIGINT", () => { job.stop(); store.close(); process.exit(0); });
 } else {
   show(await anchorOnce({ store, chain: anchorChain }));
