@@ -12,23 +12,93 @@ OCDL 은 그 거절에 증거를 붙인다. 제3자는 기관 서버에 한 번�
 
 TRUST404 트랙 3 — Off-chain Decision Provenance 제출작.
 
-## 30초 안에 확인하기
+## 설치
 
 ```bash
 npm install
-npm run demo1
 ```
 
-`demo1`은 번들러가 "EntryPoint 예치금 부족"을 사유로 UserOperation을 드랍하는 상황을
-만든다. 거절 번들을 파일로 굳힌 뒤 **로그 서버 프로세스를 내리고** 검증 도구를 별도
-프로세스로 띄운다.
+Node 24 이상. `node:sqlite`와 네이티브 TypeScript 실행을 쓴다. 앵커 컨트랙트를
+띄우려면 anvil과 forge도 필요하다. `curl -L https://foundry.paradigm.xyz | bash`
+
+## 쓰는 법
+
+주체가 넷이다. 체인, 로그, 게이트웨이, 검증자. 각자 다른 프로세스다.
+
+### 체인
+
+앵커 컨트랙트를 올리고 게이트웨이를 레지스트리에 등록한다. 등록이 없으면 아무나
+거절 레코드를 발급할 수 있다.
+
+```bash
+anvil --port 8545
+
+cd contracts && LOG_OPERATOR=$OP_ADDR forge script script/Deploy.s.sol \
+  --rpc-url http://127.0.0.1:8545 --broadcast --private-key $OWNER_KEY
+
+cast send $ANCHOR "setGateway(address,bool)" $GW_ADDR true \
+  --rpc-url http://127.0.0.1:8545 --private-key $OWNER_KEY
+```
+
+### 로그와 앵커
+
+로그 서버는 레코드를 받아 트리에 넣고 접수 확인에 서명한다. 앵커 작업은 루트를
+주기적으로 체인에 올린다. **앵커는 차단 경로 밖이다.** 체인이 멈춰도 게이트웨이는
+계속 판단한다.
+
+```bash
+node cli/log-server.ts --db ./log.db --port 8788 \
+  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --operator-key $OP_KEY
+
+node cli/anchor.ts --db ./log.db --anchor $ANCHOR \
+  --rpc http://127.0.0.1:8545 --operator-key $OP_KEY --watch 15
+```
+
+서버는 시작할 때 자기 키가 컨트랙트의 `logOperator`와 맞는지 확인하고 아니면 뜨지
+않는다. 안 맞으면 발급한 접수 확인이 전부 검증에서 떨어지는데, 그걸 몇 시간 뒤에
+알게 된다.
+
+### 게이트웨이
+
+참조 목록을 **판단보다 먼저** 공표한다. 이걸 건너뛰면 게이트웨이가 판단 시점에
+피해자별 목록을 지어낼 수 있고, 검증 9단계가 그걸 잡는다.
+
+```bash
+node cli/gateway.ts publish-list --anchor $ANCHOR --rpc http://127.0.0.1:8545 \
+  --log http://127.0.0.1:8788 --gateway-key $GW_KEY --out policy-update.json
+```
+
+거절이 나면 레코드를 만들어 요청자에게 주고 로그에 제출한다.
+
+```bash
+node cli/gateway.ts reject --target 0x…cafe --value 5000000000000000000 \
+  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
+  --gateway-key $GW_KEY --requester-key $RQ_KEY --out receipt.json
+```
+
+거절과 번들이 나뉘어 있다. 거절 직후에는 그 리프를 덮는 앵커가 아직 없어서 포함
+증명이 안 나온다. 요청자는 영수증을 먼저 받아두고 앵커가 올라간 뒤에 번들을 굳힌다.
+`--wait`가 그때까지 기다리고, 실제 걸린 시간을 로그가 서명한 상한과 나란히 찍는다.
+
+```bash
+node cli/gateway.ts bundle --receipt receipt.json --out bundle.json --wait 90 \
+  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
+  --gateway-key $GW_KEY
+```
 
 ```
-  09  로그 서버 종료  이제 기관 쪽에서 가져올 수 있는 것이 없다
-  10  로그 서버 확인  연결 거부 — fetch failed
+편입까지 12초  (로그가 서명한 상한 3600초)
+```
 
-  $ node cli/verify-rejection.ts rejection_bundle.json --rpc http://127.0.0.1:8957
+### 검증자
 
+번들 파일 하나와 RPC 주소만 있으면 된다. 기관 서버는 내려도 된다.
+
+```bash
+node cli/verify-rejection.ts bundle.json --rpc http://127.0.0.1:8545
+```
+
+```
   통과     1. 필드 집합과 커밋 루트
   통과     2. 게이트웨이 서명
   통과     3. 레지스트리 등록
@@ -46,87 +116,96 @@ npm run demo1
   책임: 정상
 ```
 
-기관 서버는 죽어 있는데 검증이 끝난다. 그리고 번들러가 댄 사유가 거짓이라는 것까지
-나온다. 판단 시점 예치금이 요청액보다 컸다.
-
-anvil과 forge가 필요하다. `curl -L https://foundry.paradigm.xyz | bash`
-
-## 나머지 두 데모
-
-```bash
-npm run demo2   # 로그 운영자가 DB를 직접 고치고 리프를 지운다
-npm run demo3   # 게이트웨이가 목록 안에 있는 주소를 목록 밖이라고 거절한다
-```
-
-`demo2`는 운영자가 HTTP API를 안 거치고 SQLite에 직접 UPDATE를 날린다. 접수 검증도
-서명 검증도 안 탄다. 그런데 남의 리프만 고쳤는데도 내 기록의 검증이 6단계에서 깨진다.
-audit path가 이웃의 해시를 지나가기 때문이다. 조작한 루트를 같은 크기로 다시 앵커하려
-하면 컨트랙트가 거부한다.
-
-`demo3`은 1~9단계가 전부 통과한다. 서명도 포함 증명도 정책 인용도 정상이다. 거짓말은
-10단계에서만 드러난다.
-
-## 손으로 돌리기
-
-데모 스크립트는 한 프로세스에서 전부 띄운다. 각 주체를 따로 세우려면 이렇게 한다.
-
-```bash
-anvil --port 8545
-
-cd contracts && LOG_OPERATOR=$OP_ADDR forge script script/Deploy.s.sol \
-  --rpc-url http://127.0.0.1:8545 --broadcast --private-key $OWNER_KEY
-
-cast send $ANCHOR "setGateway(address,bool)" $GW_ADDR true \
-  --rpc-url http://127.0.0.1:8545 --private-key $OWNER_KEY
-```
-
-로그 서버와 앵커 작업은 별도 프로세스다. 앵커는 차단 경로 밖에서 주기적으로 돈다.
-
-```bash
-node cli/log-server.ts --db ./log.db --port 8788 \
-  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --operator-key $OP_KEY
-
-node cli/anchor.ts --db ./log.db --anchor $ANCHOR \
-  --rpc http://127.0.0.1:8545 --operator-key $OP_KEY --watch 15
-```
-
-게이트웨이는 세 단계다. 목록을 판단보다 **먼저** 공표해야 검증 9단계가 통과한다.
-
-```bash
-node cli/gateway.ts publish-list --anchor $ANCHOR --rpc http://127.0.0.1:8545 \
-  --log http://127.0.0.1:8788 --gateway-key $GW_KEY --out policy-update.json
-
-node cli/gateway.ts reject --target 0x…cafe --value 5000000000000000000 \
-  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
-  --gateway-key $GW_KEY --requester-key $RQ_KEY --out receipt.json
-
-node cli/gateway.ts bundle --receipt receipt.json --out bundle.json --wait 90 \
-  --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
-  --gateway-key $GW_KEY
-```
-
-거절과 번들이 나뉘는 게 핵심이다. 거절 직후에는 그 리프를 덮는 앵커가 아직 없어서
-포함 증명이 안 나온다. 요청자는 영수증을 먼저 받아두고 앵커가 올라간 뒤에 번들을
-굳힌다. `--wait`가 그때까지 기다리고, 실제 걸린 시간을 로그가 서명한 상한과 나란히
-찍는다.
-
-```
-편입까지 12초  (로그가 서명한 상한 3600초)
-```
-
-이제 로그 서버를 내려도 된다.
-
-```bash
-node cli/verify-rejection.ts bundle.json --rpc http://127.0.0.1:8545
-```
-
 종료 코드는 통과 0, 실패 1, 번들이나 RPC 자체가 깨졌으면 2다. 판정 불가 단계가
 있어도 다른 단계가 다 통과하면 0이고, 보고서가 어느 단계를 못 따졌는지 적는다.
 `--json`을 주면 보고서를 기계가 읽는다.
 
-부하를 보려면 `node cli/seed.ts --count 20000 …`으로 먼저 채운다. 2만 건이면 DB는
+부하를 보려면 `node cli/seed.ts --count 20000 …`으로 채운다. 2만 건이면 DB는
 42MB지만 번들은 8.8KB다. 포함 증명 경로가 로그 스케일로만 자라기 때문이다.
 초당 180건쯤 들어가고 병목은 서명이다.
+
+### 로그 공개하기
+
+로그 전체를 파일로 내보내 따로 퍼블리시할 수 있다. 운영 키를 받지 않는다. sqlite 를
+읽기만 하므로 서명 키를 쥔 프로세스와 분리해서 돌린다.
+
+```bash
+node cli/export-log.ts --db ./log.db --out ./public-log
+```
+
+`leaves.jsonl` 한 줄에 리프 하나, `anchors.json` 에 앵커 이력이 들어간다. 리프에는
+원문이 없다. 필드는 난수를 섞은 커밋뿐이고 원문은 요청자 번들에만 있다. 공개되는 건
+게이트웨이 주소, 정책 해시, 발급 시각, 커밋 값이다. 거절이 언제 몇 건 있었는지는
+드러난다. 투명성 로그라 그게 목적이다.
+
+받은 쪽은 로그 서버를 부르지 않고 전체를 감사한다.
+
+```bash
+node cli/audit-log.ts --dir ./public-log --anchor $ANCHOR --rpc http://127.0.0.1:8545
+```
+
+```
+  통과  모든 리프가 JCS 정규형
+  통과  리프 67건 전부 등록된 게이트웨이의 서명
+  통과  크기 61 루트가 체인과 일치
+
+  6건이 아직 앵커되지 않았다. 이 구간은 판정하지 않는다.
+```
+
+증명을 받아서 검증하는 게 아니라 **트리를 처음부터 다시 만든다.** 리프 하나를 고치면
+그 리프의 서명과 루트가 같이 깨지고, 한 줄을 지우면 서명은 전부 멀쩡한데 루트만
+어긋난다. 어느 쪽이든 체인에 박힌 값과 안 맞는다.
+
+거절 한 건을 확인하는 `verify-rejection.ts` 와 역할이 다르다. 저쪽은 증거를 가진
+개인이 쓰고, 이쪽은 로그 전체를 지켜보는 감시자가 쓴다.
+
+이 리포의 데모 로그는 별도 리포로 퍼블리시한다. 거절 2만 건의 로그가 정상본, 세 건을
+고친 수정본, 그 세 건을 지운 삭제본 세 판본으로 들어 있고 앵커 컨트랙트가 올라간 체인
+상태도 같이 있다. 코드를 안 돌려도 데이터부터 볼 수 있다. `scripts/build-log-repo.sh`
+가 그 디렉터리를 통째로 만든다.
+
+<!-- 공개 로그 리포: 링크 -->
+
+## 자기 정책 붙이기
+
+CLI는 `sdk/demo-policy.ts`를 쓴다. 다른 정책을 쓰려면 문서를 직접 만들어 `Gateway`에
+넘긴다. 정책 문서 전체가 `policyHash`의 대상이라 규칙을 고치거나 **순서만 바꿔도**
+해시가 달라진다. 먼저 일치하는 규칙이 이기므로 순서가 정책의 일부다.
+
+```ts
+import { Gateway } from "./sdk/gateway.ts";
+import { domain } from "./lib/sign.ts";
+
+const policy = {
+  version: 2,
+  rules: [
+    { rule_id: "AMOUNT_CAP_EXCEEDED", description: "금액이 한도를 초과함",
+      severity: "hold", verifiability: "verifiable",
+      predicate: { kind: "gt", field: "value", limit: "1000000000000000000" } },
+    { rule_id: "MANUAL_REVIEW", description: "담당자 보류",
+      severity: "review", verifiability: "discretionary" },
+  ],
+  data_sets: { allowedTargets: ["0x…beef"] },
+};
+
+const gw = new Gateway({
+  account, domain: domain(chainId, anchorAddress), policy,
+  logUrl: "http://127.0.0.1:8788",
+});
+
+await gw.publishPolicyData(policy.data_sets.allowedTargets);
+const { decision, receipt } = await gw.handle({ request, intent, intentSig });
+```
+
+술어는 `in_set`, `not_in_set`, `gt`, `state_slot` 넷이다. 술어가 없는 규칙은
+`evaluate`가 평가하지 않는다. 기존 심사 엔진이 이미 판단했다면 그 결과를
+`handle({ forceRule })`로 넘긴다. 리프에 적은 `verifiability`가 규칙 정의와 다르면
+검증 9단계에서 걸린다. 술어 없는 규칙은 10·11단계가 판정 불가로 나오고, 보고서가
+"사유는 검증되지 않았다"로 쓴다. 재량 사유를 쓰는 건 자유지만 그 비율이 공개된다.
+
+`handle`은 로그 제출이 실패해도 예외를 던지지 않는다. `submitError`만 채운다.
+레코드는 이미 서명됐고 요청자 손에 있으므로 유효하다. 제출하지 않은 책임은 나중에
+검증에서 드러난다.
 
 ## 어떻게 되어 있나
 
@@ -299,11 +378,13 @@ fraud proof는 진실이 로컬에서 판정되지 않을 때 필요하다. 옵�
 
 ```
 lib/
+  jcs.ts            RFC 8785 정규화. 모든 해시 입력이 여기를 거친다
   merkle.ts         RFC 6962 트리. 포함 증명, 일관성 증명
   sorted-merkle.ts  정렬 트리. 비포함 증명
   state-proof.ts    EIP-1186 상태 증거. 헤더 RLP, MPT 검증
   record.ts         리프 구성, 필드 커밋, 정책 문서
   sign.ts           EIP-712 서명 세 개
+  receipt.ts        요청자 영수증, 책임 판정
   bundle.ts         자족적 번들 조립과 파싱
   verify.ts         검증 11단계
   log-store.ts      접수 검증, 트리 관리, 증명 발급
@@ -316,9 +397,11 @@ cli/
   log-server.ts        로그 서버
   gateway.ts           목록 공표, 거절, 번들 조립
   anchor.ts            앵커링
+  export-log.ts        로그 전체 내보내기
+  audit-log.ts         공개된 로그 전체 감사
   seed.ts              대량 적재
 contracts/          LogAnchor.sol
-scripts/            데모 3종, 감사 시나리오
+scripts/            데모 3종, 감사 시나리오, 공개 로그 빌드
 ```
 
 앵커 컨트랙트가 짧다. 루트 고정과 레지스트리뿐이다.
@@ -346,6 +429,29 @@ function submitRoot(bytes32 root, uint64 treeSize) external {
 9162가 표준 수준에서 6962를 대체한 건 맞다. 그런데 **머클 트리 정의는 그대로
 승계했다.** 9162의 변경점은 CMS precertificate, TLS 확장 개명, 로그 OID, `TransItem`
 인코딩이다. 전부 인증서 생태계 배관이고 거절 기록에는 해당 사항이 없다.
+
+## 시연 스크립트
+
+각 주체를 한 프로세스에 띄워 시나리오를 자동으로 돌린다. 트랙 제출용 시연 3종이다.
+
+```bash
+npm run demo1   # 로그 서버를 내리고 검증한다. 기관 접촉 0회
+npm run demo2   # 로그 운영자가 DB를 직접 고치고 리프를 지운다
+npm run demo3   # 게이트웨이가 목록 안에 있는 주소를 목록 밖이라고 거절한다
+```
+
+`demo1`은 번들러가 "EntryPoint 예치금 부족"을 사유로 UserOperation을 드랍하는 상황을
+만든다. 번들을 파일로 굳힌 뒤 **로그 서버 프로세스를 내리고** 검증 도구를 별도
+프로세스로 띄운다. 기관 서버는 죽어 있는데 검증이 끝나고, 번들러가 댄 사유가
+거짓이라는 것까지 나온다. 판단 시점 예치금이 요청액보다 컸다.
+
+`demo2`는 운영자가 HTTP API를 안 거치고 SQLite에 직접 UPDATE를 날린다. 접수 검증도
+서명 검증도 안 탄다. 그런데 남의 리프만 고쳤는데도 내 기록의 검증이 6단계에서 깨진다.
+audit path가 이웃의 해시를 지나가기 때문이다. 조작한 루트를 같은 크기로 다시 앵커하려
+하면 컨트랙트가 거부한다.
+
+`demo3`은 1~9단계가 전부 통과한다. 서명도 포함 증명도 정책 인용도 정상이다. 거짓말은
+10단계에서만 드러난다.
 
 ## 테스트
 
@@ -380,4 +486,4 @@ MPT 검증은 직접 구현하지 않고 `@ethereumjs/mpt`를 쓴다. 표준 형
 단일 로그 운영자 구성이며 운영 환경에서는 내구성 저장소와 키 관리가 따로 필요하다.
 
 Node 26에서 개발하고 테스트했다. `node:sqlite`와 네이티브 TypeScript 실행을 쓰므로
-24 미만에서는 돌지 않는다. 런타임 의존성은 viem과 `@ethereumjs/mpt` 둘뿐이다.
+24 미만에서는 돌지 않는다. 런타임 의존성은 viem과 `@ethereumjs/mpt`, `@ethereumjs/util` 셋뿐이다.

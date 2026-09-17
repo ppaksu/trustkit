@@ -22,7 +22,7 @@ interface Args {
 
 function parseArgs(argv: string[]): Args {
   const rest: string[] = [];
-  let rpc = process.env.NEGLOG_RPC ?? "";
+  let rpc = process.env.OCDL_RPC ?? "";
   let json = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--rpc") rpc = argv[++i] ?? "";

@@ -11,13 +11,9 @@ import { LogStore } from "../lib/log-store.ts";
 import { connectAnchor } from "../lib/chain.ts";
 import { anchorOnce, reconcile, startAnchorJob } from "../lib/anchor-job.ts";
 import { domain } from "../lib/sign.ts";
+import { arg, installErrorHandler } from "./args.ts";
 
-const arg = (k: string, d?: string): string => {
-  const i = process.argv.indexOf(`--${k}`);
-  const v = i >= 0 ? process.argv[i + 1] : process.env[`OCDL_${k.toUpperCase().replace(/-/g, "_")}`];
-  if (v === undefined && d === undefined) throw new Error(`--${k} 가 필요하다`);
-  return v ?? d!;
-};
+installErrorHandler();
 
 const rpc = arg("rpc", "http://127.0.0.1:8545");
 const anchorAddr = arg("anchor") as Address;

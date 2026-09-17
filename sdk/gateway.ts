@@ -81,6 +81,11 @@ export interface GatewayOptions {
   policy: PolicyDocument;
   /** 참조 목록의 정렬 머클 루트. 사후에 유리한 목록을 지어내 붙이는 걸 막는다. */
   policyDataRoot?: Hex;
+  /**
+   * 목록 이름 => 루트. 정책에 목록이 둘 이상일 때 쓴다. 공표는 별도 프로세스에서
+   * 이미 끝났고 이 프로세스는 판단만 하는 경우가 있어 값만 받는 경로가 필요하다.
+   */
+  policyDataRoots?: Record<string, Hex>;
   /** 생략하면 레코드만 만들고 제출하지 않는다. */
   logUrl?: string;
   now?: () => number;
@@ -108,6 +113,8 @@ export interface HandleResult {
 
 export class Gateway {
   private o: Required<Pick<GatewayOptions, "now" | "fetchImpl">> & GatewayOptions;
+  /** 참조 목록 이름 => 공표한 루트. 정책에 목록이 둘 이상일 때 필요하다. */
+  private roots = new Map<string, Hex>();
   readonly policyHash: Hex;
 
   constructor(options: GatewayOptions) {
@@ -117,6 +124,7 @@ export class Gateway {
       ...options,
     };
     this.policyHash = policyHash(options.policy) as Hex;
+    for (const [k, v] of Object.entries(options.policyDataRoots ?? {})) this.roots.set(k, v);
   }
 
   get address(): Address {
@@ -130,7 +138,7 @@ export class Gateway {
    * 지어낼 수 있고, 그러면 정적 사유 검증이 자기들끼리 앞뒤만 맞는 공허한 확인이
    * 된다. 로그에 먼저 박아야 피해자별 위조가 공개된 행위로 바뀐다.
    */
-  async publishPolicyData(values: readonly string[]): Promise<Receipt> {
+  async publishPolicyData(values: readonly string[], setName?: string): Promise<Receipt> {
     const root = rootOfList(values) as Hex;
     const { body } = buildLeafBody({
       type: "policy_update",
@@ -147,6 +155,7 @@ export class Gateway {
       disclosures: [],
       log_ack: null,
     };
+    if (setName) this.roots.set(setName, root);
     this.o.policyDataRoot = root;
 
     if (!this.o.logUrl) return receipt;
@@ -175,10 +184,17 @@ export class Gateway {
     const rule = decision.rule;
     const state = input.state;
 
+    // 레코드가 커밋하는 루트는 **그 거절 사유가 의존하는 목록**의 루트다. 정책에
+    // 목록이 둘 이상이면 아무거나 박아서는 안 된다. 검증 9단계가 인용된 규칙의
+    // 목록과 커밋된 루트를 대조하므로 다른 목록의 루트를 박으면 거기서 걸린다.
+    const p = rule.predicate;
+    const setName = p && (p.kind === "in_set" || p.kind === "not_in_set") ? p.set : undefined;
+    const dataRoot = (setName && this.roots.get(setName)) || this.o.policyDataRoot;
+
     const { body, disclosures } = buildLeafBody({
       gateway: this.address,
       policyHash: this.policyHash,
-      policyDataRoot: this.o.policyDataRoot,
+      policyDataRoot: dataRoot,
       fields: {
         requester: req.requester.toLowerCase(),
         target: req.target.toLowerCase(),
