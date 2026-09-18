@@ -24,9 +24,6 @@ Node 24 이상. `node:sqlite`와 네이티브 TypeScript 실행을 쓴다. 앵�
 
 ### 체인
 
-앵커 컨트랙트를 올리고 게이트웨이를 레지스트리에 등록한다. 등록이 없으면 아무나
-거절 레코드를 발급할 수 있다.
-
 ```bash
 anvil --port 8545
 
@@ -39,10 +36,6 @@ cast send $ANCHOR "setGateway(address,bool)" $GW_ADDR true \
 
 ### 로그와 앵커
 
-로그 서버는 레코드를 받아 트리에 넣고 접수 확인에 서명한다. 앵커 작업은 루트를
-주기적으로 체인에 올린다. **앵커는 차단 경로 밖이다.** 체인이 멈춰도 게이트웨이는
-계속 판단한다.
-
 ```bash
 node cli/log-server.ts --db ./log.db --port 8788 \
   --anchor $ANCHOR --rpc http://127.0.0.1:8545 --operator-key $OP_KEY
@@ -51,45 +44,31 @@ node cli/anchor.ts --db ./log.db --anchor $ANCHOR \
   --rpc http://127.0.0.1:8545 --operator-key $OP_KEY --watch 15
 ```
 
-서버는 시작할 때 자기 키가 컨트랙트의 `logOperator`와 맞는지 확인하고 아니면 뜨지
-않는다. 안 맞으면 발급한 접수 확인이 전부 검증에서 떨어지는데, 그걸 몇 시간 뒤에
-알게 된다.
-
 ### 게이트웨이
 
-참조 목록을 **판단보다 먼저** 공표한다. 이걸 건너뛰면 게이트웨이가 판단 시점에
-피해자별 목록을 지어낼 수 있고, 검증 9단계가 그걸 잡는다.
+참조 목록을 판단보다 먼저 공표한다.
 
 ```bash
 node cli/gateway.ts publish-list --anchor $ANCHOR --rpc http://127.0.0.1:8545 \
   --log http://127.0.0.1:8788 --gateway-key $GW_KEY --out policy-update.json
 ```
 
-거절이 나면 레코드를 만들어 요청자에게 주고 로그에 제출한다.
+거절이 나면 영수증을, 앵커가 그 리프를 덮으면 번들을 낸다. `--wait` 가 그때까지 기다린다.
 
 ```bash
 node cli/gateway.ts reject --target 0x…cafe --value 5000000000000000000 \
   --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
   --gateway-key $GW_KEY --requester-key $RQ_KEY --out receipt.json
-```
 
-거절과 번들이 나뉘어 있다. 거절 직후에는 그 리프를 덮는 앵커가 아직 없어서 포함
-증명이 안 나온다. 요청자는 영수증을 먼저 받아두고 앵커가 올라간 뒤에 번들을 굳힌다.
-`--wait`가 그때까지 기다리고, 실제 걸린 시간을 로그가 서명한 상한과 나란히 찍는다.
-
-```bash
 node cli/gateway.ts bundle --receipt receipt.json --out bundle.json --wait 90 \
   --anchor $ANCHOR --rpc http://127.0.0.1:8545 --log http://127.0.0.1:8788 \
   --gateway-key $GW_KEY
 ```
 
-```
-편입까지 12초  (로그가 서명한 상한 3600초)
-```
-
 ### 검증자
 
-번들 파일 하나와 RPC 주소만 있으면 된다. 기관 서버는 내려도 된다.
+번들 파일 하나와 RPC 주소면 된다. 종료 코드는 통과 0, 실패 1, 번들이나 RPC 오류 2.
+`--json` 으로 기계가 읽는 보고서를 낸다.
 
 ```bash
 node cli/verify-rejection.ts bundle.json --rpc http://127.0.0.1:8545
@@ -113,31 +92,13 @@ node cli/verify-rejection.ts bundle.json --rpc http://127.0.0.1:8545
   책임: 정상
 ```
 
-종료 코드는 통과 0, 실패 1, 번들이나 RPC 자체가 깨졌으면 2다. 판정 불가 단계가
-있어도 다른 단계가 다 통과하면 0이고, 보고서가 어느 단계를 못 따졌는지 적는다.
-`--json`을 주면 보고서를 기계가 읽는다.
+### 로그 공개와 감사
 
-부하를 보려면 `node cli/seed.ts --count 20000 …`으로 채운다. 2만 건이면 DB는
-42MB지만 번들은 8.8KB다. 포함 증명 경로가 로그 스케일로만 자라기 때문이다.
-초당 180건쯤 들어가고 병목은 서명이다.
-
-### 로그 공개하기
-
-로그 전체를 파일로 내보내 따로 퍼블리시할 수 있다. 운영 키를 받지 않는다. sqlite 를
-읽기만 하므로 서명 키를 쥔 프로세스와 분리해서 돌린다.
+`export-log` 는 운영 키를 받지 않는다. sqlite 를 읽기만 한다.
 
 ```bash
 node cli/export-log.ts --db ./log.db --out ./public-log
-```
 
-`leaves.jsonl` 한 줄에 리프 하나, `anchors.json` 에 앵커 이력이 들어간다. 리프에는
-원문이 없다. 필드는 난수를 섞은 커밋뿐이고 원문은 요청자 번들에만 있다. 공개되는 건
-게이트웨이 주소, 정책 해시, 발급 시각, 커밋 값이다. 거절이 언제 몇 건 있었는지는
-드러난다. 투명성 로그라 그게 목적이다.
-
-받은 쪽은 로그 서버를 부르지 않고 전체를 감사한다.
-
-```bash
 node cli/audit-log.ts --dir ./public-log --anchor $ANCHOR --rpc http://127.0.0.1:8545
 ```
 
@@ -149,21 +110,11 @@ node cli/audit-log.ts --dir ./public-log --anchor $ANCHOR --rpc http://127.0.0.1
   6건이 아직 앵커되지 않았다. 이 구간은 판정하지 않는다.
 ```
 
-증명을 받아서 검증하는 게 아니라 **트리를 처음부터 다시 만든다.** 리프 하나를 고치면
-그 리프의 서명과 루트가 같이 깨지고, 한 줄을 지우면 서명은 전부 멀쩡한데 루트만
-어긋난다. 어느 쪽이든 체인에 박힌 값과 안 맞는다.
+`--dir` 대신 `--leaves` 와 `--anchors` 로 파일을 따로 줄 수 있다. 대량 적재는
+`node cli/seed.ts --count 20000 …`.
 
-거절 한 건을 확인하는 `verify-rejection.ts` 와 역할이 다르다. 저쪽은 증거를 가진
-개인이 쓰고, 이쪽은 로그 전체를 지켜보는 감시자가 쓴다.
-
-데모 로그는 별도 리포에 올려뒀다. 코드를 안 돌려도 데이터부터 볼 수 있다.
-
-**[ppaksu/ocdl-rejection-log](https://github.com/ppaksu/ocdl-rejection-log)**
-
-거절 2만 건의 로그가 정상본, 세 건을 고친 수정본, 그 세 건을 지운 삭제본 세 판본으로
-들어 있고 앵커 컨트랙트가 올라간 체인 상태도 같이 있다. 클론해서 체인을 띄우고 세
-판본에 위 감사 명령을 돌리면 결과가 셋 다 다르다. `scripts/build-log-repo.sh` 가 그
-디렉터리를 통째로 만든다.
+데모 로그: **[ppaksu/ocdl-rejection-log](https://github.com/ppaksu/ocdl-rejection-log)**
+거절 2만 건의 정상본, 세 건을 고친 수정본, 그 세 건을 지운 삭제본, 체인 상태.
 
 ## 거절 레코드 스키마
 
@@ -239,7 +190,7 @@ cli/
   audit-log.ts         공개된 로그 전체 감사
   seed.ts              대량 적재
 contracts/          LogAnchor.sol
-scripts/            데모 3종, 감사 시나리오, 공개 로그 빌드
+scripts/            시나리오 검증
 ```
 
 앵커 컨트랙트가 짧다. 루트 고정과 레지스트리뿐이다.
@@ -261,20 +212,6 @@ function submitRoot(bytes32 root, uint64 treeSize) external {
 
 앵커 1회에 슬롯 세 개를 쓴다. gasUsed 73,115. 레코드 건수와 무관하다. 2만 건을 한
 루트로 묶어도 같은 값이다.
-
-## 시연 스크립트
-
-각 주체를 한 프로세스에 띄워 시나리오를 자동으로 돌린다. 트랙 제출용 시연 3종이다.
-
-```bash
-npm run demo1   # 로그 서버를 내리고 검증한다. 기관 접촉 0회
-npm run demo2   # 로그 운영자가 DB를 직접 고치고 리프를 지운다
-npm run demo3   # 게이트웨이가 목록 안에 있는 주소를 목록 밖이라고 거절한다
-```
-
-`demo1` 은 11단계에서 사유가 거짓임을 잡고, `demo2` 는 남의 리프를 고쳐도 내 기록이
-6단계에서 깨지는 걸 보이고, `demo3` 은 1~9단계가 다 통과하는데 10단계에서만 거짓말이
-드러나는 걸 보인다.
 
 ## 테스트
 
