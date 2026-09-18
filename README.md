@@ -163,34 +163,42 @@ leaf_hash  = SHA256(0x00 ‖ JCS(leaf))
 결과는 통과, 실패, **판정 불가** 셋이다. 10·11 중 하나도 판정되지 않으면 보고서가
 "검증 통과" 대신 "조작 흔적 없음, 다만 사유는 검증되지 않았다" 로 쓴다.
 
-## 리포 구조
+## 레포 구조
 
 ```
-lib/
-  jcs.ts            RFC 8785 정규화. 모든 해시 입력이 여기를 거친다
-  merkle.ts         RFC 6962 트리. 포함 증명, 일관성 증명
-  sorted-merkle.ts  정렬 트리. 비포함 증명
-  state-proof.ts    EIP-1186 상태 증거. 헤더 RLP, MPT 검증
-  record.ts         리프 구성, 필드 커밋, 정책 문서
-  sign.ts           EIP-712 서명 세 개
-  receipt.ts        요청자 영수증, 책임 판정
-  bundle.ts         자족적 번들 조립과 파싱
-  verify.ts         검증 11단계
-  log-store.ts      접수 검증, 트리 관리, 증명 발급
-  log-server.ts     HTTP 계층
-  chain.ts          앵커 컨트랙트 바인딩
-  anchor-job.ts     주기 앵커링
-sdk/gateway.ts      정책 평가, 상태 증거 수집, 레코드 서명
-cli/
-  verify-rejection.ts  독립 검증 도구
-  log-server.ts        로그 서버
-  gateway.ts           목록 공표, 거절, 번들 조립
-  anchor.ts            앵커링
-  export-log.ts        로그 전체 내보내기
-  audit-log.ts         공개된 로그 전체 감사
-  seed.ts              대량 적재
-contracts/          LogAnchor.sol
-scripts/            시나리오 검증
+.
+├── lib/                    검증에 필요한 전부. 신뢰 경계 안쪽
+│   ├── jcs.ts              RFC 8785 정규화. 모든 해시 입력이 여기를 거친다
+│   ├── merkle.ts           RFC 6962 트리. 포함 증명, 일관성 증명
+│   ├── sorted-merkle.ts    정렬 트리. 비포함 증명
+│   ├── state-proof.ts      EIP-1186 상태 증거. 헤더 RLP, MPT 검증
+│   ├── record.ts           리프 구성, 필드 커밋, 정책 문서
+│   ├── sign.ts             EIP-712 서명 세 개
+│   ├── receipt.ts          요청자 영수증, 책임 판정
+│   ├── bundle.ts           자족적 번들 조립과 파싱
+│   ├── verify.ts           검증 11단계
+│   ├── log-store.ts        접수 검증, 트리 관리, 증명 발급
+│   ├── log-server.ts       HTTP 계층
+│   ├── chain.ts            앵커 컨트랙트 바인딩
+│   └── anchor-job.ts       주기 앵커링
+├── sdk/
+│   ├── gateway.ts          정책 평가, 상태 증거 수집, 레코드 서명
+│   └── demo-policy.ts      데모용 정책 문서. 규칙 6종
+├── cli/
+│   ├── verify-rejection.ts 독립 검증 도구
+│   ├── audit-log.ts        공개된 로그 전체 감사
+│   ├── log-server.ts       로그 서버
+│   ├── gateway.ts          목록 공표, 거절, 번들 조립
+│   ├── anchor.ts           앵커링
+│   ├── export-log.ts       로그 전체 내보내기
+│   ├── seed.ts             대량 적재
+│   └── args.ts             인자 파싱, 종료 처리
+├── contracts/
+│   ├── src/LogAnchor.sol   루트 앵커 + 게이트웨이 레지스트리
+│   ├── script/Deploy.s.sol
+│   └── test/LogAnchor.t.sol
+├── scripts/                시나리오 검증
+└── test/                   단위 테스트 12개 파일
 ```
 
 앵커 컨트랙트가 짧다. 루트 고정과 레지스트리뿐이다.
