@@ -65,15 +65,26 @@ export interface StackOptions {
   storePath?: string;
 }
 
+// 시연 녹화용 속도 조절. OCDL_DEMO_DELAY=600 이면 한 줄마다 600ms 쉰다.
+// 데모가 1초에 끝나서 그대로 찍으면 화면에 아무것도 안 남는다.
+// step 과 heading 이 동기 함수라 호출부를 안 건드리려고 Atomics 로 막는다.
+const DEMO_DELAY = Number(process.env.OCDL_DEMO_DELAY ?? "0");
+const blocker = new Int32Array(new SharedArrayBuffer(4));
+function pause(ms = DEMO_DELAY): void {
+  if (ms > 0) Atomics.wait(blocker, 0, 0, ms);
+}
+
 let stepNo = 0;
 export function step(msg: string, detail = ""): void {
   console.log(`  ${String(++stepNo).padStart(2, "0")}  ${msg}${detail ? `  ${detail}` : ""}`);
+  pause();
 }
 export function resetSteps(): void {
   stepNo = 0;
 }
 export function heading(title: string): void {
   console.log(`\n${title}\n`);
+  pause(DEMO_DELAY * 2);
 }
 
 async function waitForRpc(url: string, tries = 60): Promise<void> {

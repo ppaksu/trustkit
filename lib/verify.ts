@@ -374,6 +374,13 @@ export async function verifyReceipt(o: VerifyOptions): Promise<VerifyReport> {
       add(9, "정책 커밋", "fail", `verifiability 가 규칙 정의와 다름: ${declared} != ${rule.verifiability}`);
       return stop();
     }
+    // severity 도 규칙에서 베껴 온 값이다. 원본과 대조하지 않으면 게이트웨이가
+    // 차단 사유를 검토 수준으로 낮춰 적어도 통과한다. 심각도 분포 통계가 무너진다.
+    const sev = disclosedValue(receipt.disclosures, "severity");
+    if (sev !== undefined && sev !== rule.severity) {
+      add(9, "정책 커밋", "fail", `severity 가 규칙 정의와 다름: ${sev} != ${rule.severity}`);
+      return stop();
+    }
     if (leaf.policy_data_root !== ZERO32) {
       // 갱신 레코드가 먼저다. 이게 통과해야 목록 대조가 의미를 갖는다.
       const pub = await checkPolicyUpdate(o, leaf, chain);

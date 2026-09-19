@@ -440,6 +440,21 @@ test("감사 — 앵커되지 않은 구간으로는 일관성이 통과하지 �
   s.store.close();
 });
 
+test("감사 — severity 를 규칙 정의보다 낮게 적으면 9단계에서 걸린다", async () => {
+  // 게이트웨이가 차단(block) 규칙을 인용하면서 리프에는 검토(review) 로 적는다.
+  // 두 값 다 서명 안에 있지만 서로 대조하지 않으면 통과한다.
+  const forged: PolicyRule = { ...RULES.denylist, severity: "review" };
+  const s = await setup(req({ target: SANCTIONED }), forged, true, rootOfList([SANCTIONED]) as Hex);
+  const rep = await verifyReceipt({
+    receipt: s.receipt, domain: D, chain: s.chain, proofs: s.proofs,
+    policy: POLICY, policyDataProof: policyDataRootChecker(),
+    staticCheck: sortedSetChecker(), now: () => NOW,
+  });
+  assert.equal(rep.ok, false);
+  assert.equal(rep.failedAt, 9);
+  s.store.close();
+});
+
 test("감사 — 목록 사유를 인용하고 루트를 커밋 안 하면 10단계에서 실패한다", async () => {
   // 판정 불가로 넘기면 루트를 아예 커밋하지 않는 게이트웨이가 영구 면제를 받는다.
   const policy: PolicyDocument = {
