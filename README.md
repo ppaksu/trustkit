@@ -34,6 +34,20 @@ cast send $ANCHOR "setGateway(address,bool)" $GW_ADDR true \
   --rpc-url http://127.0.0.1:8545 --private-key $OWNER_KEY
 ```
 
+Sepolia 에 배포해 둔 것을 그대로 써도 된다. 아래 두 값을 넣고 `--rpc` 만 바꾸면
+나머지 명령은 그대로다.
+
+```bash
+export ANCHOR=0xD289Aa81F321bed57388d3e9770B728d2660c5f1
+export RPC=https://ethereum-sepolia-rpc.publicnode.com
+```
+
+[sepolia.etherscan.io](https://sepolia.etherscan.io/address/0xD289Aa81F321bed57388d3e9770B728d2660c5f1)
+· 체인 ID `11155111` · 로그 운영자 `0x98bC48DCB9CD9Cf9696b9bAc5253442B0F72965F`
+
+이 앵커에 레코드를 올리려면 게이트웨이 등록이 필요하다. 읽기만 하는 검증·감사는
+등록 없이 누구나 돌릴 수 있다.
+
 ### 로그와 앵커
 
 ```bash
@@ -201,7 +215,7 @@ leaf_hash  = SHA256(0x00 ‖ JCS(leaf))
 └── test/                   단위 테스트 12개 파일
 ```
 
-앵커 컨트랙트가 짧다. 루트 고정과 레지스트리뿐이다.
+앵커 컨트랙트는 루트 고정과 게이트웨이 레지스트리만 한다.
 
 ```solidity
 function submitRoot(bytes32 root, uint64 treeSize) external {
@@ -218,13 +232,13 @@ function submitRoot(bytes32 root, uint64 treeSize) external {
 `treeSize <= lastTreeSize`를 막는 한 줄이 롤백과 같은 크기 재앵커를 동시에 막는다.
 `anchoredAt`이 발급 시각의 상한을 준다. 검증 6단계의 시각 검사가 여기에 걸려 있다.
 
-앵커 1회에 슬롯 세 개를 쓴다. gasUsed 73,115. 레코드 건수와 무관하다. 2만 건을 한
-루트로 묶어도 같은 값이다.
+앵커 1회에 슬롯 세 개를 쓴다. 레코드 건수와 무관하다. 2만 건을 한 루트로 묶어도 같다.
+forge 측정 73,115, Sepolia 실측 73,475. 1 gwei 면 앵커 1회에 0.0000735 ETH 다.
 
 ## 테스트
 
 ```bash
-npm test               # 182
+npm test               # 183
 npm run test:contracts #   9
 
 npm run lifecycle      # 정상 / 수정 / 삭제 순으로 로그를 흔든다
@@ -236,7 +250,10 @@ npm run regress        # 감사에서 찾은 우회 경로가 여전히 막히�
 
 ## 상태
 
-해커톤 제출용 프로토타입이다. 로컬 anvil 위에서 돈다. 테스트넷 배포는 아직이다.
+해커톤 제출용 프로토타입이다. 로컬 anvil 과 Sepolia 양쪽에서 돌렸다. Sepolia 에서는
+리프 42건에 앵커 2회를 올려 검증 11단계가 전부 통과했다. 일관성 증명(7단계)도 두 앵커
+사이에서 실제로 돌았다.
+
 단일 로그 운영자 구성이며 운영 환경에서는 내구성 저장소와 키 관리가 따로 필요하다.
 
 Node 26에서 개발하고 테스트했다. `node:sqlite`와 네이티브 TypeScript 실행을 쓰므로
